@@ -5,7 +5,12 @@ import { isRemove, isUpdate } from "@openscd/oscd-api/utils.js";
 
 import { handleEdit } from "../foundation/helpers.test.js";
 
-import { scl, sclDuplicateLNodes } from "./removeIED.testfile.js";
+import {
+  scl,
+  sclDuplicateBoundLNodes,
+  sclDuplicateLNodes,
+  sclLNodesInSeparateContainers,
+} from "./removeIED.testfile.js";
 
 import { removeIED } from "./removeIED.js";
 
@@ -137,8 +142,8 @@ describe("Function to an remove the IED and its referenced elements", () => {
     /*
      * Here we need to test:
      * - Delete all LNode references found with matching iedName, BUT only inside the substation section (but not inside Private sections).
-     * - Find all LNode references with matching iedName and either set them to None, or delete them if setting them to None would result in duplicate LNode keys within the same scope.
-     *   The scope is defined as the nearest Bay, VL or Substation parent.
+     * - Find all LNode references with matching iedName and either set them to None, or delete them if setting them to None would result in duplicate LNode keys within the same container.
+     *   The scope is defined as the LNode's immediate parent, matching the schema's uniqueness constraint.
      */
     describe("without 'preserveNodes' set (default)", () => {
       ["Bay", "VoltageLevel", "Substation"].forEach((scope) => {
@@ -232,6 +237,70 @@ describe("Function to an remove the IED and its referenced elements", () => {
           ).length;
           expect(afterSpec_LNodeCount).to.equal(beforeSpec_LNodeCount);
         });
+      });
+
+      it("does not remove a bound LNode because an unbound copy exists in another container", () => {
+        const sclDom = new DOMParser().parseFromString(
+          sclLNodesInSeparateContainers,
+          "application/xml",
+        );
+        const ied = sclDom.querySelector('IED[name="IED1"]')!;
+        const bound = sclDom.querySelector(
+          'ConductingEquipment[name="QB1"] LNode',
+        )!;
+
+        const edits = removeIED({ node: ied }, { preserveLNodes: true });
+
+        expect(edits.some((edit) => isRemove(edit) && edit.node === bound)).to
+          .be.false;
+        expect(
+          edits.some(
+            (edit) =>
+              isUpdate(edit) &&
+              edit.element === bound &&
+              edit.attributes?.iedName === "None",
+          ),
+        ).to.be.true;
+
+        handleEdit(edits);
+
+        expect(
+          sclDom.querySelector(
+            'ConductingEquipment[name="QB1"] LNode[iedName="None"]',
+          ),
+        ).to.not.be.null;
+        expect(
+          sclDom.querySelector(
+            'ConductingEquipment[name="QA1"] LNode[iedName="None"]',
+          ),
+        ).to.not.be.null;
+      });
+
+      it("sets only one of two matching bound LNodes in the same container to None", () => {
+        const sclDom = new DOMParser().parseFromString(
+          sclDuplicateBoundLNodes,
+          "application/xml",
+        );
+        const ied = sclDom.querySelector('IED[name="IED1"]')!;
+
+        const edits = removeIED({ node: ied }, { preserveLNodes: true });
+
+        const lNodeEdits = edits.filter(
+          (edit) =>
+            (isRemove(edit) && edit.node.nodeName === "LNode") ||
+            (isUpdate(edit) && edit.element.nodeName === "LNode"),
+        );
+        expect(lNodeEdits.length).to.equal(2);
+        expect(lNodeEdits.filter(isRemove).length).to.equal(1);
+        expect(lNodeEdits.filter(isUpdate).length).to.equal(1);
+
+        handleEdit(edits);
+
+        const lNodes = sclDom.querySelectorAll(
+          'ConductingEquipment[name="QA1"] > LNode',
+        );
+        expect(lNodes.length).to.equal(1);
+        expect(lNodes[0].getAttribute("iedName")).to.equal("None");
       });
 
       it("does not create duplicate LNode keys when removing both IEDs", () => {

@@ -53,9 +53,12 @@ const lNodeKey = (ln: Element): string =>
     .map((a) => ln.getAttribute(a) ?? "")
     .join("|");
 
-const getLNodeScopeElement = (ln: Element): Element => {
-  return ln.closest("Bay, VoltageLevel, Substation")!;
-};
+/**
+ * The SCL schema applies the LNode uniqueness constraint to the immediate
+ * parent container of the LNode (e.g. a ConductingEquipment or a Function),
+ * so that is also the scope in which duplicate keys have to be detected.
+ */
+const getLNodeScopeElement = (ln: Element): Element => ln.parentElement!;
 
 const createRemoveEdit = (ln: Element): Remove => {
   return { node: ln };
@@ -82,9 +85,11 @@ function removeBoundLNodes(ied: Element, name: string): Remove[] {
  * Build the edits required to detach all public LNode bindings to `iedName`
  * from the substation model, preserving each as a specification entry with
  * (iedName="None"). A cache of all LNodes (with iedName="None") is first built
- * up (grouped by their scope/container). This is used to check if changing the
+ * up (grouped by their parent container). This is used to check if changing the
  * iedName of a bound LNode to "None" would create a duplicate binding within its
- * scope. If this would result in a duplicate, the LNode is simply removed instead.
+ * container. If this would result in a duplicate, the LNode is simply removed
+ * instead. The cache is updated while processing, so duplicates within the set
+ * of bound LNodes removed in this call are handled as well.
  */
 function detachLNodeBindings(
   ied: Element,
@@ -108,19 +113,24 @@ function detachLNodeBindings(
     keys.add(lNodeKey(ln));
   });
 
-  return boundNodes
-    .map((ln) => {
-      const scope = getLNodeScopeElement(ln);
-      const keys = unboundLNodesByScope.get(scope);
+  return boundNodes.map((ln) => {
+    const scope = getLNodeScopeElement(ln);
+    let keys = unboundLNodesByScope.get(scope);
+    if (!keys) {
+      keys = new Set<string>();
+      unboundLNodesByScope.set(scope, keys);
+    }
 
-      const key = lNodeKey(ln);
-      if (keys && keys.has(key)) {
-        return createRemoveEdit(ln);
-      } else {
-        return setLNodeToNone(ln);
-      }
-    })
-    .filter((edit): edit is SetAttributes | Remove => edit !== undefined);
+    const key = lNodeKey(ln);
+    if (keys.has(key)) {
+      return createRemoveEdit(ln);
+    }
+
+    // Remember the key, so that a second bound LNode with the same key in the
+    // same container would not also be set to "None".
+    keys.add(key);
+    return setLNodeToNone(ln);
+  });
 }
 
 /** Options for the {@link removeIED} function. */
