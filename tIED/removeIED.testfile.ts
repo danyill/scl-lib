@@ -576,6 +576,43 @@ export const scl = `<SCL xmlns="http://www.iec.ch/61850/2003/SCL" xmlns:esld="ht
 </DataTypeTemplates>
 </SCL>`;
 
+/** SCL with the same LNode key in two different ConductingEquipments within
+ *  one Bay, where only one of them is an existing specification (iedName=None). */
+export const sclLNodesInSeparateContainers = `<SCL xmlns="http://www.iec.ch/61850/2003/SCL" version="2007" revision="B" release="4">
+<Substation name="S1">
+  <VoltageLevel name="V1">
+    <Bay name="B1">
+      <ConductingEquipment name="QA1">
+        <LNode iedName="None" ldInst="L" lnClass="XCBR" lnInst="1"/>
+      </ConductingEquipment>
+      <ConductingEquipment name="QB1">
+        <LNode iedName="IED1" ldInst="L" lnClass="XCBR" lnInst="1"/>
+      </ConductingEquipment>
+    </Bay>
+  </VoltageLevel>
+</Substation>
+<IED name="IED1">
+  <AccessPoint name="AP1"/>
+</IED>
+</SCL>`;
+
+/** SCL with two bound LNodes sharing the same key in one container. */
+export const sclDuplicateBoundLNodes = `<SCL xmlns="http://www.iec.ch/61850/2003/SCL" version="2007" revision="B" release="4">
+<Substation name="S1">
+  <VoltageLevel name="V1">
+    <Bay name="B1">
+      <ConductingEquipment name="QA1">
+        <LNode iedName="IED1" ldInst="L" lnClass="XCBR" lnInst="1"/>
+        <LNode iedName="IED1" ldInst="L" lnClass="XCBR" lnInst="1"/>
+      </ConductingEquipment>
+    </Bay>
+  </VoltageLevel>
+</Substation>
+<IED name="IED1">
+  <AccessPoint name="AP1"/>
+</IED>
+</SCL>`;
+
 /** SCL with two IEDs that have LNodes in the same ConductingEquipment
  *  with matching (ldInst, lnClass, lnInst, prefix). Removing both IEDs
  *  sequentially should not create duplicate LNode key sequences. */
