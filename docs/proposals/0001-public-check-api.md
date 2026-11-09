@@ -1,1087 +1,1127 @@
-# Proposal: public check API and one error model
+# Proposal: a public check API for scl-lib
 
 | Field | Value |
 |---|---|
-| Status | Draft for review |
+| Status | Draft for review, revision 4 |
 | Parent issue | [#109 Error handling in functions](https://github.com/openscd/scl-lib/issues/109) |
 | Discussion | [Zulip `#457465`, topic `scl-lib`](https://openscd.zulipchat.com/#narrow/channel/457465/topic/scl-lib/near/634236716) |
-| Review | Comment on the pull request, or on a line of this file in the diff |
-| Deliverable | Design only. No code changes in this pull request. |
+| Review | Comment on this file in the pull request diff, or answer the decisions in Section 5 |
+| Scope | Design only. No code changes. |
 
 ## How to review
 
-1. Read Section 1 (Summary) and Section 5.1 (Categories of concern). They decide the shape of the API.
-2. Read Section 13.2. It has 15 decisions. Each decision gives the options and our preferred answer, with the reason.
-3. Reply in the pull request with the decision number and the letter, for example "D5: B". A reply can also propose a new option.
-4. Comment on any line of this file in the diff. The numbers in Section 2.1 come from a measurement of real files, and Appendix B gives the method.
+1. Read Sections 1 to 4. They give the problem, the evidence, the API and the categories.
+2. Read Section 5. It has 15 decisions. Each decision gives the options and our preferred answer.
+3. Reply with the decision number and the letter. Example: `D5: B`.
 
-The option letters are not ordered by merit. In most decisions we list our preferred answer first, so it carries the letter A. Review each option on its own.
+The letters are not a ranking. In most decisions, the preferred answer is the first option.
 
-## 1. Summary
+## 1. Problem
 
-The library can tell you which edit an operation makes. It can also return `null` or `[]` when the operation makes no edit. It cannot tell you why the operation makes no edit.
+The library can show which edit an operation makes. It can also show "no edit" with `null` or `[]`. It cannot show **why** there is no edit.
 
-A caller that needs only a diff does not need the reason. A caller that must disable a button and explain the problem needs the reason.
+```ts
+const insert = createDataSet(ln0, { attributes: { name: "DS1" } });
+// null — no LN0 in the parent? name in use? maximum reached?
+```
 
-The library uses three different ways to say "not possible". These ways share no vocabulary:
+One value covers three causes. A plugin cannot use this value to disable a button or to explain the problem.
 
-| Channel | Example | Used by |
-|---|---|---|
-| Boolean | `canInstantiateSubscriptionSupervision(...)` returns `false` | Public check functions |
-| `null` or `[]` | `createDataSet(...)` returns `null` | Create, remove and update functions |
-| Special value | `maxReportControl(...)` returns `{max: -1}` | Limit helper functions |
+Four element families have a `canAdd*` check that `index.ts` does not export. The two checks that it exports return only a boolean.
 
-The library does not throw an error today. This issue keeps that behaviour for expected results. The issue also adds one set of reason codes and one details object. Every channel uses them.
+## 2. Evidence
 
-The proposal builds on a study of 716 real SCL files (Sections 2.1 and 5.1).
+### 2.1 What we did
 
-This issue proposes seven changes:
+We studied the SCL files that users open, not the test files of the library.
 
-1. One reason vocabulary. The `SclReason` type has one constant object and kebab-case string values. One payload type, `SclReasonDetails`, holds the values.
-2. A family of check functions: `checkAddDataSet`, `checkAddGSEControl`, `checkAddReportControl`, `checkAddSampledValueControl`, `checkAddFCDA` and `checkInstantiateSubscriptionSupervision`.
-3. One policy for limits that the file does not declare. The default policy permits the addition. An option refuses it.
-4. A policy for functions that fail without a reason. The issue also lists each such function.
-5. A deprecation path for the two public check functions that return a boolean.
-6. One closed set of concern categories with stable prefixes (Section 5.1). The category prefix of a reason code shows which kind of constraint applies.
-7. A new README section. The check functions become part of the public contract.
+- We collected 716 files with the extension `.scd`, `.cid` or `.icd` from three local directories. The directories contain project files, vendor files and test material.
+- We selected 120 files at a fixed interval from the sorted list. We added the four largest files to the selection.
+- We read each file one time and counted the conditions in Table 1.
+- We compared the counts with the schema constraints in `IEC_61850-6.2018.SCL.2007B4.full`: `xs:unique`, `xs:key` and `xs:keyref`. We also compared them with the rules of the `Services` element.
 
-Section 13.2 lists 15 decisions for the reviewers. Each decision gives the options and our preferred answer.
+### 2.2 Why we did it
 
-## 2. Reason for the change
+Each condition in Table 1 needs a decision in the library: permit the operation or refuse it. A decision for a rare condition can be strict. A decision for a condition in half of the files must not block the user. The counts show which conditions occur, and which rule would break real files.
 
-Harald Brabenetz, Stephen Renwick and Christian Dinkel discussed the topic in Zulip (`#457465`, topic `scl-lib`).
+The counts also show where the current rules disagree with the files. A disagreement is a defect in the library, or a defect in the file. Either result is important for the design.
 
-- Harald Brabenetz needs the reason when a publisher cannot add an element. Examples are a missing `LN0`, a missing `Services` element and a maximum that limits the count. The publisher disables the button and shows the reason in a tooltip.
-- Stephen Renwick wants three conditions. The library must stay independent of the user interface. The library must return structured results and not sentences. The new check function must replace `canAddReportControl()`.
-- Harald Brabenetz wants the values that the check already calculates. Example: "The maximum number of buffered report instances (4 of 4) has been reached."
-- Christian Dinkel rejects translation in the library. He also wants a clear reason when a function fails.
+### 2.3 What we found
 
-This proposal satisfies the three reviewers. The library contains no user text and no user interface concepts. The `details` object gives the host application all values that it needs for a message in any language.
-
-### 2.1 Evidence from real SCL files
-
-The proposal uses a study of the SCL files that users open. The study covered 716 `.scd`, `.cid` and `.icd` files in three local collections. The script read 120 sampled files and the four largest files: 676 IED, 9,986 `ReportControl`, 1,579 `GSEControl`, 403 `SampledValueControl`, 3,116 `DataSet`, 63,323 `FCDA` and 40,321 `ExtRef`.
-
-The study used the schema `IEC_61850-6.2018.SCL.2007B4.full` and the `xs:unique`, `xs:key` and `xs:keyref` constraints in that schema.
-
-Table 2 gives the result. Each row is a condition that a check function must answer.
-
-**Table 1: Conditions found in real SCL files**
+**Table 1: Conditions in the sample**
 
 | Condition | Count | Files |
 |---|---|---|
 | IED with no `Services` element | 83 of 676 | — |
-| IED that uses a service that it does not declare | `SMVsc` 163, `GOOSE` 24, `ConfDataSet` 29, `ConfReportControl` 5 | 58 of 120 |
-| Declared `max="0"` | `GOOSE` 44, `SMVsc` 12 | — |
-| `SupSubscription` with `maxGo` or `maxSv` equal to 0 | 254 of 397 declarations | — |
+| IED that uses a service that it does not declare | 221 IEDs | 58 of 120 |
+| Service declared with `max="0"` | `GOOSE` 44, `SMVsc` 12 | — |
+| `SupSubscription` with `maxGo` or `maxSv` equal to 0 | 254 of 397 | — |
 | Scope above `ConfReportControl@max`, instances counted | 72 | 24 |
-| Scope above `ConfReportControl@max`, control blocks counted | 6 | 2 |
-| Scope above `GOOSE@max` | 16 | — |
-| Control block with no `ConnectedAP` | `GSE` 31, `SMV` 55 | 18 |
-| `lnType` without a `LNodeType` | 27 ids, 69 uses | 17 |
-| `datSet` without a `DataSet` | 9 | 8 |
-| `iedName` without an `IED` | 43 ids | 4 |
-| `ExtRef` with `pDO` | 9,294 of 40,321 | 49 of 103 files have none |
+| Scope above `ConfReportControl@max`, blocks counted | 6 | 2 |
+| Control block with no `ConnectedAP` | 86 | 18 |
+| Pointer with no target (`lnType`, `datSet`, `iedName`) | 27 ids, 9 refs, 43 ids | 17, 8, 4 |
+| `ExtRef` with `pDO` | 9,294 of 40,321 | 49 of 103 have none |
 | `Private` element | 76,612 | 102 of 120 |
 
-Three results are important for the design:
+Table 4 in Appendix A gives the full list.
 
-1. A missing `Services` element and an undeclared service are common. A strict default prevents edits in 58 of 120 files.
-2. An explicit `max="0"` is a different condition from an absent declaration. The file says that the service does not exist.
-3. Real files contain reference faults. The library must report them. The library must not use them to refuse an unrelated edit.
+### 2.4 What the evidence changed
 
-## 3. Current state
+1. **The default policy.** 83 IEDs have no `Services` element. 58 of 120 files use a service that they do not declare. A strict default refuses edits in half of the sample. The library must permit these edits and offer a strict option. This result sets D5 and D6.
 
-| Function | File | Exported by `index.ts`? | Constraints |
-|---|---|---|---|
-| `canAddDataSet(ln0)` | `tDataSet/canAddDataSet.ts` | No | `Services > ConfDataSet@max` |
-| `canAddGSEControl(ln0)` | `tGSEControl/canAddGSEControl.ts` | No | `Services > GOOSE@max` |
-| `canAddSampledValueControl(ln0)` | `tSampledValueControl/…` | No | `Services > SMVsc@max` |
-| `canAddReportControl(parent, o)` | `tReportControl/…` | No | `ConfReportControl@max`, `@maxBuf` |
-| `canAddFCDA(dataSet)` | `tFCDA/canAddFCDA.ts` | Yes | `ConfDataSet@maxAttributes` |
-| `maxAttributes(fcda)` | `tFCDA/canAddFCDA.ts` | Yes | Returns `{max, scope}` with a `-1` value |
-| `canInstantiateSubscriptionSupervision(s, o)` | `tLN/supervision/…` | Yes | Five rules, each optional, no reason |
-| `doesFcdaMeetExtRefRestrictions` | `tExtRef/…` | Yes | `pDO`, `pDA`, `pLN`, `pServT` |
-| `matchDataAttributes`, `matchSrcAttributes`, `isSubscribed` | `tExtRef/…` | Yes | Match predicates |
+2. **`max="0"` is not an absent declaration.** 44 `GOOSE` declarations and 12 `SMVsc` declarations use zero. The file says that the service does not exist. A zero declaration must always refuse, with its own reason code. Only an absent declaration follows the policy. This result sets the `capability-zero` code.
 
-The library checks maximum counts only. No check function gives a reason. Four of the five element families are not exported.
+3. **The report counting rule is a defect.** The current library counts `RptEnabled@max` instances. That rule refuses 72 scopes in 24 of 120 files. A rule that counts control blocks refuses 6 scopes in 2 files. The library refuses valid edits in one fifth of the sample. This result sets D15 and makes it a fix, not a policy choice.
 
-A plugin can reach `canAddReportControl` only by a deep import of `dist/tReportControl/canAddReportControl.js`.
+4. **A create function can omit a requested part.** 86 control blocks in 18 files have no `ConnectedAP` element. The create function returns the control block and no `GSE` or `SMV`. The caller cannot see this. The check must answer for the part that the caller requests. This result sets D8.
 
-Two check functions are public and return a boolean. A new function must replace them. Section 7 gives the procedure.
+5. **Real files contain reference faults.** 27 `lnType` ids, 9 `datSet` references and 43 `iedName` ids have no target. These faults occur in 17, 8 and 4 files. The library must be able to report these faults. It must not use them to refuse an unrelated edit. This result sets the `reference` category and the document check in Appendix E.
 
-Not every predicate needs a result object. `doesFcdaMeetExtRefRestrictions`, `matchDataAttributes`, `matchSrcAttributes`, `isSubscribed` and `sourceControlBlock` answer the question "does this element match?". These functions have no refusal to explain. Use this rule:
+6. **Most `ExtRef` elements have no restriction data.** Only 9,294 of 40,321 elements have `pDO`. 49 of 103 files have no `pDO` at all. A restriction check cannot run on most elements. An absent restriction must permit the operation. This result sets the `restriction-undeclared` code.
 
-> A predicate that permits or refuses an operation gets a `check*` result form. A predicate that only compares data stays a boolean.
+7. **Vendor content is normal.** The sample contains 76,612 `Private` elements in 102 files. The library must ignore content that it does not know. It must not refuse an operation because of it.
 
-## 4. Functions that fail without a reason
+### 2.5 What the study does not show
 
-Two public functions return the same value for different causes:
+- The sample is not a random sample of all SCL files. It is the material that was available on one machine.
+- The study counts conditions. It does not decide which party is correct. A maximum that a file exceeds can be a fault in the file or a different reading of the standard.
+- The report control rows show two readings of `ConfReportControl@max`. D15 asks the reviewers to agree the reading.
 
-```ts
-// tDataSet/createDataSet.ts
-const insert = createDataSet(ln0, { attributes: { name: "DS1" } });
-// null  →  no LN0 in the parent? name in use? maximum reached?
-//          The caller cannot identify the cause.
+## 3. Proposed API
 
-// tGSEControl/createGSEControl.ts
-const edits = createGSEControl(ln0, { gseControl: { name: "GC1" } });
-// []    →  the same three causes, and a DataSet that does not exist.
+The library gets one check function for each create function:
+
+```
+checkAddDataSet            checkAddFCDA
+checkAddGSEControl         checkInstantiateSubscriptionSupervision
+checkAddReportControl      checkAddSampledValueControl
 ```
 
-Table 2 lists each function that returns `null`, `[]` or a special value for more than one cause.
+Each function returns the first constraint that prevents the operation. It also returns the values that it compared.
 
-**Table 2: Functions with ambiguous results**
-
-| Function | Return type | Causes that the caller cannot identify |
-|---|---|---|
-| `createDataSet` | `Insert \| null` | No `LN` or `LN0`; name in use; maximum reached |
-| `createGSEControl` | `Insert[]` | No `LN0`; name in use; missing `DataSet`; maximum reached |
-| `createReportControl` | `Insert \| null` | No `LN` or `LN0`; name in use; missing `DataSet`; maximum or `maxBuf` reached |
-| `createSampledValueControl` | `Insert[]` | Same causes as `createGSEControl` |
-| `createGSEControl`, `createSampledValueControl` (partial result) | `Insert[]` of length 1 or 2 | No `ConnectedAP` exists. The function returns the control block only and omits the `GSE` or `SMV` part. Section 6.4 gives the treatment. |
-| `createSMV` | `Insert \| null` | The parent is not a `ConnectedAP` |
-| `instantiateSubscriptionSupervision` | `Insert \| null` | Five different supervision rules |
-| `removeSupervision` | `Remove \| null` | Not removable; no `Val` to edit; `inst` conflict |
-| `removeDataType` | `Remove[]` | Not in `DataTypeTemplates`; type is linked and `force` is false |
-| `updateDataSet` | `SetAttributes[]` | Wrong tag; `DataSet` has no parent |
-| `updateGSEControl`, `updateReportControl` | `Edit[]` | Wrong tag |
-| `maxReportControl` | `{max: -1}` | "No maximum declared" has the same value as other conditions |
-| `maxAttributes` | `{max: -1}` | "Root is not an `IED` or an `AccessPoint`" has the same value |
-
-### 4.1 A missing `Services` element
-
-Five files read a maximum from the `Services` element. They use three different values when the element is absent. Table 3 shows the values and the effect.
-
-**Table 3: Effect when the `Services` element is absent**
-
-| Module | Value when `Services` is absent | Result of the check function |
-|---|---|---|
-| `maxReportControl` | `-1` | Refuses |
-| `maxDataSet` | `0` | Refuses |
-| `maxGSEControl` | `0` | Refuses |
-| `maxSampledValueControl` | `0` | Refuses |
-| `maxAttributes` | Current `FCDA` count | Refuses |
-
-The helper functions return different values. All check functions refuse the addition.
-
-The comment in `maxReportControl` says that `-1` means "no maximum". The check function ignores this meaning and refuses the addition. `canAddReportControl` compares the requested count with `-1`. The comparison is always true. The caller cannot see the difference between `-1` and `0`.
-
-The files also disagree about the source of the maximum. Table 4 shows the sequence.
-
-**Table 4: Source of the maximum when both `IED` and `AccessPoint` declare one**
-
-| Module | Sequence |
-|---|---|
-| `maxReportControl` | The larger of the two values |
-| `maxDataSet` | `AccessPoint`, then `IED` |
-| `maxGSEControl` | `AccessPoint`, then `IED` |
-| `maxSampledValueControl` | `AccessPoint`, then `IED` |
-
-These sequences disagree. Example: the `IED` declares `max="7"` and the `AccessPoint` declares `max="3"`. Report controls use 7. DataSets use 3. One shared `servicesLimits()` function must apply one sequence to all families.
-
-These behaviours are accidental. They are not a policy. A tooltip cannot explain them. Decide the behaviour one time and put the decision in `details.scope`.
-
-### 4.2 Limits that the file does not declare
-
-The `Services` element is optional in the schema. Many SCL files do not contain it. Practical causes:
-
-- Edition 1 files and older vendor files have no complete `Services` section.
-- Exported or reduced files lose the section.
-- A new edition can declare a service that this library does not know.
-- A file can declare the element and omit a single attribute, for example `<ConfDataSet max="12"/>` without `maxAttributes`.
-
-The library must not refuse to work on these files. If it does, a plugin cannot edit a large part of the real SCL that users open.
-
-But some users require the strict behaviour. Example: a user prepares a file for a specific device, and the device does not declare a service. The user wants the library to refuse the addition.
-
-The two requirements conflict. Use a policy option. Section 5.3 gives the type.
-
-**Table 5: Options for an undeclared limit**
-
-| Option | Default | Effect when the file declares no maximum | Effect when the file declares a maximum |
-|---|---|---|---|
-| `permit` | Yes | The check permits the addition. The result has `limits.scope: "unbounded"`. | The check compares the requested count with the declared value. |
-| `refuse` | No | The check refuses the addition with `reason: "capability-undeclared"`. | The check compares the requested count with the declared value. |
-
-Rules for the policy:
-
-1. The default is `permit`. A plugin that does nothing gets no new refusal.
-2. The policy applies to one call. Pass it in the options object. Do not use a global setting. Global state gives different results for two documents in one process, and it gives different results in tests.
-3. The policy has one axis only: the handling of an undeclared limit. It does not change the structural checks, the name checks or the reference checks. A refused structural check stays a refusal in both policies. For this reason the option name describes the limit, not `strict`.
-4. A declared `max="0"` is not a limit. It is a capability statement. Both policies refuse the addition with `capability-zero`. Real files use this form: Table 1 counts 44 declarations for `GOOSE` and 12 for `SMVsc`.
-5. A value that is not a number is an undeclared limit. `permit` permits the addition. `refuse` refuses it.
-
-### 4.3 Unused file
-
-The file `tGSE/canAddSampledValueControl.ts` is a copy of the file in `tSampledValueControl`. Nothing imports it. It contains the variable names `apGOOSE` and `iedGOOSE`. Delete the file before you add new code.
-
-## 5. One error model
-
-### 5.1 Categories of concern
-
-The schema has four kinds of constraint: `xs:unique`, `xs:key`, `xs:keyref` and type restrictions. IEC 61850-6 adds capability rules and semantic rules. Table 6 groups these into seven categories. Supervision rules use the same categories and need no category of their own.
-
-**Table 6: Categories of concern**
-
-| Category | Constraint source | What the category answers | Blocks the operation? |
-|---|---|---|---|
-| `target` | schema content model | Is there a valid place for the element? | Always |
-| `capability` | `Services`, `tServiceWithMax` | Does the device declare the service, and with which maximum? | `zero`, `mode`, `invalid` always. `undeclared` follows `limitPolicy` |
-| `limit` | `@max`, `@maxBuf`, `@maxAttributes` | Does the requested element stay within the declared maximum? | Always |
-| `identity` | `xs:unique`, `xs:key` | Does another element use the same name, id or instance? | Always |
-| `reference` | `xs:keyref` | Does the pointer have a target, and does a target still have no user? | Always, for the operation that creates the reference |
-| `mapping` | IEC 61850-6 `Communication` | Does the communication section cover the control block? | Only when the caller requests the part |
-| `restriction` | IEC 61850-7-3, IEC 61850-7-4, `valKind`, `valImport` | Is the data compatible with the request? | `mismatch` and `not-editable` always. `undeclared` never |
-
-Rules for the categories:
-
-1. **The first part of a reason code is its category.** Example: `limit-buffered-reached` is a `limit` reason. A host can group its messages with `reason.split("-")[0]`.
-2. **A new reason code needs a category.** If no category fits, the proposal needs a new category and a review of Table 6.
-3. **Every code states its source.** The source is a schema constraint name, an IEC clause or the word `policy`. The source goes in the comment of the constant.
-4. **The category selects the default behaviour.** A `target` code never becomes a warning. A `capability-undeclared` code never becomes a refusal unless the caller sets `limitPolicy: "refuse"`.
-5. **One set of codes serves two tasks.** The `check*` functions return the first refusal. A future document check, for example `validateScl`, returns all findings. Both use Table 7.
-
-**Table 7: Reason codes**
-
-| Code | Category | Meaning | Source |
-|---|---|---|---|
-| `target-missing` | `target` | No `LN`, `LN0`, `LDevice`, `AccessPoint` or `ConnectedAP` for the request | content model |
-| `target-kind` | `target` | The element has the wrong tag | content model |
-| `target-detached` | `target` | The element is not in a document | `policy` |
-| `target-invalid` | `target` | The element cannot be used as a parent | content model |
-| `capability-undeclared` | `capability` | The file does not declare the service | `policy` |
-| `capability-zero` | `capability` | The file declares the service with `max="0"` | `tServiceWithMax` |
-| `capability-mode` | `capability` | The file excludes the requested kind, for example `bufMode="unbuffered"` | `tServiceConfReportControl` |
-| `capability-invalid` | `capability` | `max` is absent or is not a number | `tServiceWithMax` |
-| `limit-reached` | `limit` | The requested count exceeds the declared total | `@max` |
-| `limit-buffered-reached` | `limit` | The buffered count exceeds `maxBuf` | `@maxBuf` |
-| `limit-unbuffered-reached` | `limit` | The unbuffered count exceeds the remaining total | `@max`, `@maxBuf` |
-| `limit-attributes-reached` | `limit` | The DataSet exceeds `maxAttributes` | `@maxAttributes` |
-| `identity-name-taken` | `identity` | Another element uses the name | `uniqueReportControlInLN0` and related |
-| `identity-id-taken` | `identity` | Another element uses the id | `uniqueDTT_ID` |
-| `identity-already-present` | `identity` | The supervision or subscription exists | `policy` |
-| `identity-instance-conflict` | `identity` | The requested `inst` is in use | `uniqueLNInLDevice` |
-| `reference-missing` | `reference` | The pointer has no target | `ref2DataSetGSELN0` and related |
-| `reference-in-use` | `reference` | The target is still referenced | `ref2DOType` and related |
-| `reference-duplicate` | `reference` | Two elements claim the same key | `uniqueConnectedAP` |
-| `mapping-missing` | `mapping` | No `ConnectedAP` for the control block | `ConnectedAP` content model |
-| `mapping-missing-gse` | `mapping` | The `ConnectedAP` has no `GSE` for the control block | `Communication` |
-| `mapping-missing-smv` | `mapping` | The `ConnectedAP` has no `SMV` for the control block | `Communication` |
-| `restriction-mismatch` | `restriction` | The `FCDA` does not meet the `ExtRef` restrictions | IEC 61850-7-3, IEC 61850-7-4 |
-| `restriction-undeclared` | `restriction` | The `ExtRef` has no `pDO`, so the check cannot run | `policy` |
-| `restriction-not-editable` | `restriction` | `valKind`, `valImport` or a Private marker forbids the change | IEC 61850-6 |
-
-### 5.2 Reason codes
+### 3.1 Result
 
 ```ts
-// foundation/errors.ts
-
-/**
- * Machine-readable reasons. The string values are public API.
- * A change to a string value is a breaking change.
- * The first part of each value is its category. Section 5.1 gives the categories.
- */
-export const sclReason = {
-  // target: no valid place for the operation
-  targetMissing: "target-missing",
-  targetKind: "target-kind",
-  targetDetached: "target-detached",
-  targetInvalid: "target-invalid",
-
-  // capability: what the file declares about the device
-  capabilityUndeclared: "capability-undeclared", // policy: limitPolicy
-  capabilityZero: "capability-zero",
-  capabilityMode: "capability-mode",
-  capabilityInvalid: "capability-invalid",
-
-  // limit: a declared maximum
-  limitReached: "limit-reached",
-  limitBufferedReached: "limit-buffered-reached",
-  limitUnbufferedReached: "limit-unbuffered-reached",
-  limitAttributesReached: "limit-attributes-reached",
-
-  // identity: names, ids and instances
-  identityNameTaken: "identity-name-taken",
-  identityIdTaken: "identity-id-taken",
-  identityAlreadyPresent: "identity-already-present",
-  identityInstanceConflict: "identity-instance-conflict",
-
-  // reference: pointers between elements
-  referenceMissing: "reference-missing",
-  referenceInUse: "reference-in-use",
-  referenceDuplicate: "reference-duplicate",
-
-  // mapping: control block and Communication
-  mappingMissing: "mapping-missing",
-  mappingMissingGse: "mapping-missing-gse",
-  mappingMissingSmv: "mapping-missing-smv",
-
-  // restriction: compatible data
-  restrictionMismatch: "restriction-mismatch",
-  restrictionUndeclared: "restriction-undeclared",
-  restrictionNotEditable: "restriction-not-editable",
-} as const;
-
-export type SclReason = (typeof sclReason)[keyof typeof sclReason];
-
-/** The category of a reason. Section 5.1 gives the rules. */
-type Prefix<T> = T extends `${infer C}-${string}` ? C : never;
-export type SclCategory = Prefix<SclReason>;
-
-/** One payload for all reasons. Each reason states the fields that it sets. */
-export type SclReasonDetails = {
-  /** Tag name of the element, for example `ReportControl` or `LN0`. */
-  tag?: string;
-  /** Source of the declared maximum. `unbounded` means that no maximum exists. */
-  scope?: "AccessPoint" | "IED" | "LDevice" | "LN" | "unbounded";
+export type LimitInfo = {
+  scope: "AccessPoint" | "IED" | "LDevice" | "LN" | "unbounded";
   max?: number;
   maxBuffered?: number;
-  buffered?: number;
-  unbuffered?: number;
-  requested?: number;
-  name?: string;
-  /** The element that caused the refusal, if one element is responsible. */
-  element?: Element;
+  current?: number;
 };
-
-/** @returns The category prefix of a reason, for a host that groups messages. */
-export function sclCategory(reason: SclReason): SclCategory {
-  return reason.split("-")[0] as SclCategory;
-}
-```
-
-### 5.3 Result object
-
-```ts
-/** The policy for a maximum that the file does not declare. The default is `permit`. */
-export type LimitPolicy = "permit" | "refuse";
 
 export type CheckResult =
-  | { allowed: true; limits?: SclReasonDetails; incomplete?: SclReason[] }
-  | { allowed: false; reason: SclReason; details: SclReasonDetails };
-```
-
-The result object keeps the shape that Stephen Renwick proposed. Three items change:
-
-- The `reason` type is one shared vocabulary. It is not one enum for each element family.
-- The result object has a `details` field.
-- A permitted result can have a `limits` field. The host can then show a counter, for example "0 of 12 used". The field also shows an undeclared limit: `limits.scope === "unbounded"`. The host can then show an advisory message and still permit the addition.
-- A permitted result can have an `incomplete` field. It lists the parts of the request that the operation cannot produce. Section 6.4 gives the rules. Do not add a third value to `allowed`. A three-valued result forces a `switch` at every call site for a condition that most callers ignore.
-
-The host application needs one `switch` statement for all element families. The `details.tag` field gives the element name, for example "report instances" or "DataSets".
-
-### 5.4 Error class
-
-```ts
-/** Use this class only when the caller is not correct. Do not throw it for a refusal. */
-export class SclError extends Error {
-  readonly reason: SclReason;
-  readonly details: SclReasonDetails;
-
-  constructor(reason: SclReason, details: SclReasonDetails = {}) {
-    super(reason);
-    this.name = "SclError";
-    this.reason = reason;
-    this.details = details;
-  }
-}
-```
-
-The error class uses the same reason codes and the same details object as the result object. A host application that catches `SclError` for a log record and reads `CheckResult` for the user interface needs one `switch` statement only.
-
-### 5.5 Delivery rules
-
-1. **Refusal: return the result.** Do not throw an error. Return `{allowed: false, reason, details}`. A disabled button is an expected condition. It is not an exception.
-2. **Incorrect call: throw `SclError`.** Examples are a value that is not an element, options that contradict each other, and elements that are not in a document. Use the same reason codes.
-3. **No third channel.** Do not add a new `null` value, a new `[]` value, a new special value or a new boolean check. Existing values stay unchanged. Section 6 gives the rules.
-4. **One error class.** `SclError` is the only error class that the library throws.
-
-## 6. The check functions
-
-```ts
-// tReportControl/checkAddReportControl.ts
-import { maxReportControl } from "../tServices/tConfReportControl/maxReportControl.js";
-import { reportControlCounts } from "./reportControlCounts.js";
-import { CheckResult, sclReason } from "../foundation/errors.js";
-
-/**
- * States whether the library can add a `ReportControl` to `parent`.
- * The function does not make an edit.
- * @returns `{allowed: true}`, or the first constraint that prevents the addition,
- * with the values that the function compared.
- */
-export type CheckAddReportControlOptions = {
-  buffered?: boolean;
-  newInstances?: number;
-  limitPolicy?: LimitPolicy;
-};
-
-export function checkAddReportControl(
-  parent: Element,
-  options: CheckAddReportControlOptions = { limitPolicy: "permit" },
-): CheckResult {
-  const isBuffered = options.buffered ?? true;
-  const requested = options.newInstances ?? 1;
-  const policy = options.limitPolicy ?? "permit";
-
-  const anyLn =
-    parent.tagName === "LN0" || parent.tagName === "LN"
-      ? parent
-      : parent.querySelector("LN0, LN");
-  if (!anyLn)
-    return {
-      allowed: false,
-      reason: sclReason.targetMissing,
-      details: { tag: "ReportControl" },
+  | { allowed: true; limits?: LimitInfo }
+  | {
+      allowed: false;
+      reason: SclReasonDetails;                          // always reasons[0]
+      reasons?: [SclReasonDetails, ...SclReasonDetails[]];
     };
-
-  const { max, maxBuf, scope } = servicesLimits(parent, "ConfReportControl");
-  const { buffered, unbuffered } = reportControlCounts(parent);
-
-  const details = {
-    tag: "ReportControl",
-    scope,
-    max,
-    maxBuffered: maxBuf,
-    buffered,
-    unbuffered,
-    requested,
-  };
-
-  if (max !== undefined && buffered + unbuffered + requested > max)
-    return { allowed: false, reason: sclReason.limitReached, details };
-
-  const limit = isBuffered
-    ? (maxBuf ?? max)
-    : maxBuf === undefined
-      ? max
-      : max === undefined
-        ? undefined
-        : max - maxBuf;
-
-  /** An undeclared limit is not a refusal, unless the caller asks for one. */
-  if (limit === undefined)
-    return policy === "refuse"
-      ? { allowed: false, reason: sclReason.capabilityUndeclared, details }
-      : { allowed: true, limits: details };
-
-  const used = isBuffered ? buffered : unbuffered;
-  if (used + requested > limit)
-    return {
-      allowed: false,
-      reason: isBuffered
-        ? sclReason.limitBufferedReached
-        : sclReason.limitUnbufferedReached,
-      details,
-    };
-
-  return { allowed: true, limits: details };
-}
 ```
 
-`servicesLimits(parent, "ConfReportControl")` is one shared helper. It replaces the five `max*` functions. It finds the maximum in this sequence: `AccessPoint`, then `IED`, then `unbounded`. It returns `max?: number`, not `-1`.
-
-The helper only reads. It does not apply the policy. Each check function applies the policy to the limit that it uses.
-
-### 6.1 Example for the host application
+`reason` is one object. The field `key` selects the variant. Each variant contains only its own fields and one English sentence in `reasonText`.
 
 ```ts
-import { checkAddReportControl, CheckResult } from "@openscd/scl-lib";
-import { msg } from "@lit/localize";
-
 const check = checkAddReportControl(ln0, { buffered: true });
-
 addButton.disabled = !check.allowed;
-addButton.title = check.allowed ? "" : message(check);
 
-function message(check: Extract<CheckResult, { allowed: false }>): string {
-  const d = check.details;
-  switch (check.reason) {
-    case "target-missing":
-      return msg`There is no logical node to add this ${d.tag ?? "element"} to.`;
-    case "limit-reached":
-      return msg`The maximum number of ${d.tag} instances (${(d.buffered ?? 0) + (d.unbuffered ?? 0)} of ${d.max}) has been reached.`;
+if (!check.allowed) {
+  const d = check.reason;
+  switch (d.key) {
     case "limit-buffered-reached":
-      return msg`The maximum number of buffered ${d.tag} instances (${d.buffered} of ${d.maxBuffered}) has been reached.`;
-    case "limit-unbuffered-reached":
-      return msg`The maximum number of unbuffered ${d.tag} instances (${d.unbuffered} of ${(d.max ?? 0) - (d.maxBuffered ?? 0)}) has been reached.`;
+      addButton.title = d.reasonText;
+      break;
     default:
-      return msg`This ${d.tag ?? "element"} cannot be added.`;
+      addButton.title = d.reasonText;
   }
 }
 ```
 
-The host application makes Harald Brabenetz's three sentences with the calculated values. The host translation tool makes the translations. One `switch` statement serves all element families that use the same reason.
+`reasonText` is a complete sentence. The library fills in the values. Example: "The maximum number of buffered ReportControl instances (4 of 4) has been reached."
 
-The host can read the `limits` field when the result is permitted. If `limits.scope` is `"unbounded"`, the host can show an advisory message and still permit the addition.
+A host that wants its own text uses the same fields: `d.buffered`, `d.maxBuffered`, `d.tag`. A host that wants another language ignores `reasonText`. Appendix D gives all variants.
 
-The host can pass `limitPolicy: "refuse"` when it prepares a file for a device with a complete `Services` section. Then the check refuses an addition that the file does not declare.
+### 3.2 All reasons
 
-### 6.2 Function list
-
-| Check function | Replaces | Reason codes |
-|---|---|---|
-| `checkAddDataSet(parent)` | `canAddDataSet` | `target-missing`, `identity-name-taken`, `limit-reached` |
-| `checkAddGSEControl(ln0, o)` | `canAddGSEControl` | `target-missing`, `identity-name-taken`, `reference-missing`, `limit-reached` |
-| `checkAddSampledValueControl(ln0, o)` | `canAddSampledValueControl` | Same as `checkAddGSEControl` |
-| `checkAddReportControl(parent, o)` | `canAddReportControl` | `target-missing`, `identity-name-taken`, `reference-missing`, `limit-reached`, `limit-buffered-reached`, `limit-unbuffered-reached` |
-| `checkAddFCDA(dataSet)` | `canAddFCDA`, `maxAttributes` | `target-invalid`, `limit-attributes-reached` |
-| `checkInstantiateSubscriptionSupervision(s, o)` | `canInstantiateSubscriptionSupervision` | `target-missing`, `identity-already-present`, `restriction-not-editable`, `limit-reached` |
-
-Every check function in the table can return `capability-undeclared`. The check returns this code only when the caller sets `limitPolicy: "refuse"` and the file declares no maximum. Every function also returns `capability-zero` when the file declares `max="0"`, and `capability-mode` when the declaration excludes the requested kind.
-
-The reason codes `identity-name-taken` and `reference-missing` are not new. They exist in the private `invalid()` functions of the create functions. Move them into the check functions. Then each check function gives a complete answer.
-
-### 6.3 Alternative: one return value per operation
-
-This draft adds a check function next to each create function. A second design exists: change the create function itself. The create function returns the first failure or the edit.
+`check*` stops at the first reason. The caller can set `all: true` to get every independent reason for the same options.
 
 ```ts
-/** Result of an operation. The caller gets the edit or the first reason why there is no edit. */
-export type OperationResult<Edit> =
-  | { ok: true; edits: Edit[] }
-  | { ok: false; reason: SclReason; details: SclReasonDetails };
-
-export function createDataSet(
-  parent: Element,
-  options: CreateDataSetOptions = { attributes: {} },
-): OperationResult<Insert>;
+checkAddReportControl(ln0, { all: true })
+// { allowed: false,
+//   reason: { key: "limit-reached", … },        // reasons[0]
+//   reasons: [ limit-reached, identity-name-taken, reference-missing ] }
 ```
 
-A consumer then uses one call for both tasks:
+Use `check*` for the tooltip of one row. Use `all: true` for the dialog behind the row. Appendix B gives the rules.
+
+### 3.3 Three channels
+
+| Situation | Channel |
+|---|---|
+| Expected refusal, for example a maximum | Returned `{ allowed: false, reason, reasons? }` |
+| Incorrect call, for example a value that is not an element | Thrown `SclError` with the same variants |
+| No edit produced (legacy) | `null` or `[]`, unchanged |
 
 ```ts
-const result = createDataSet(ln0, { attributes: { name: "DS1" } });
-addButton.disabled = !result.ok;
-addButton.title = result.ok ? "" : message(result);
-```
-
-Table 8 compares the two designs.
-
-**Table 8: Parallel check functions and one return value**
-
-| Item | Parallel check functions (this draft) | One return value per operation |
-|---|---|---|
-| Public functions per operation | Two: `checkAddX` and `createX` | One: `createX` |
-| Risk that check and edit disagree | Yes. Two code paths must stay equal. A test must prove it. | No. One code path. |
-| A caller can forget the check | Yes | No |
-| Existing return type of `createX` | `Insert \| null` or `Edit[]`, unchanged | New type. Breaking change in every create function. |
-| Button state without an edit | The check does the work only | The operation builds the edit, then the caller discards it |
-| Migration for a consumer | Add one call, keep the old call | Change every call site and every return check |
-| Size of the public surface | Larger. Six new functions and six old functions. | Smaller. Six functions, and the old ones change. |
-
-Both designs give one result: **the first failure**. Stephen Renwick proposed this behaviour. Neither design returns a list of all problems. A file-level validation report is a different task. Section 10 keeps it out of scope.
-
-The order of the checks must be stable. Both designs need one documented sequence. This draft uses:
-
-1. Structural check: the target exists and has the correct type.
-2. Name check: the name is not in use.
-3. Reference check: the referenced element exists.
-4. Limit check: the declared maximum is not exceeded.
-5. Policy check: an undeclared limit is permitted or refused.
-
-A test must lock the sequence. Without a lock, the message for one element can change between two releases.
-
-**Recommendation: keep the check functions. Do not change the signature of the create functions.**
-
-Two properties of the current code decide this:
-
-1. **The create function answers a larger question than the check function.** `createGSEControl` and `createSampledValueControl` return a partial edit set when no `ConnectedAP` element exists. The set contains the control block and no `GSE` or `SMV` element. Example: `createGSEControl` calls `connectedAp(ln0, options.gse?.apName)`. A `null` result gives `return edits;` with one item. A single `{ok: true, edits}` result cannot show this partial success. The caller needs two questions:
-   - "May I add this control block to this `LN0`?"
-   - "Is the communication part included?"
-2. **Drift between the two functions is avoidable without one return value.** Write the create function on top of the check function, and add a test that locks the relation:
-
-```ts
-// The create function must use the check function. One implementation of each rule.
-const check = checkAddReportControl(anyLn, options);
-if (!check.allowed) return null;
-```
-
-```ts
-// Test: the two results agree for all fixtures.
-expect(createReportControl(ln, options) === null).to.equal(
-  !checkAddReportControl(ln, options).allowed,
-);
-```
-
-These properties make the check function the correct home for the narrow question. The create function stays the home for the edit.
-
-A further argument is the cost of migration. Every plugin call site uses `Insert | null` or `Insert[]` and checks the result. One return value forces a change at every call site.
-
-**When one return value is the better design:**
-
-- A new library with no consumers.
-- A requirement to return all failures, not the first failure.
-- An API that owns the user interface as well.
-
-Revisit the decision if the project later adds a file-level validation function. That function must return all problems. It is a third task. It does not replace the check functions.
-
-**Decision for this draft:** keep the check functions. Section 13.2 keeps the alternative open for the review.
-
-### 6.4 Partial results
-
-A create function can return an edit set that lacks a part of the request. Example: `createGSEControl` with a `gse` option and no `ConnectedAP` element. The function returns the control block only.
-
-The library must not report this condition as a general third result. Use this rule instead:
-
-> The check function answers for the same scope as the request. If the caller requests the communication part, the check function refuses an addition that cannot include it. If the caller does not request it, the single control block is a complete result.
-
-```ts
-// Communication part requested and not possible.
-checkAddGSEControl(ln0, { gse: { apName: "AP1" } });
-// { allowed: false, reason: "target-missing", details: { tag: "ConnectedAP" } }
-
-// Communication part not requested.
-checkAddGSEControl(ln0, {});
-// { allowed: true }
-```
-
-The caller selects the scope. To add the control block without the `GSE` part, the caller omits `gse`.
-
-If a host must show an advisory message and still continue, use the `incomplete` field on the permitted result:
-
-```ts
-{ allowed: true, incomplete: ["target-missing"] }
-```
-
-`incomplete` holds reason codes from the same vocabulary. It does not change the shape of the result, so `if (result.allowed)` stays correct.
-
-Table 9 gives the treatment of each condition.
-
-**Table 9: Treatment of a missing part**
-
-| Condition | Requested by the caller | Result |
-|---|---|---|
-| No `ConnectedAP` for a requested `gse` or `smv` part | Yes | `allowed: false`, reason `target-missing` |
-| No `ConnectedAP` for a requested `gse` or `smv` part | No | `allowed: true` |
-| No `ConnectedAP`, and the host needs a warning | Yes, with `incomplete` requested | `allowed: true`, `incomplete: ["target-missing"]` |
-
-This rule changes the current behaviour of `createGSEControl` and `createSampledValueControl` only when the caller requests the communication part. That correction belongs to the release decision in section 12.4. Record it in Table 13.
-
-### 6.5 One function name with overloads
-
-TypeScript can keep one function name and stay backward compatible. Use overloads. The return type depends on the options literal.
-
-Add an overload to `createDataSet`: with `report: true` the function returns `OperationResult<Insert>`, and without it the function returns `Insert | null`. The return type follows the options literal. Existing call sites compile without a change. The design has three costs:
-
-1. One name has two documented behaviours. It needs two test matrices.
-2. The return type depends on a literal value. `const o = { report: true }` loses the narrowing. The caller must write `{ report: true } as const`.
-3. The body branches on `report`. The internal split remains. The overloads hide it; they do not remove it.
-
-A conditional throw (`{ throwOnFailure: true }`) does not solve the problem. TypeScript cannot change the return type after a runtime branch.
-
-**Recommendation:** do not use overloads. Use one check function and one create function. The overload adds cost without removing the split.
-
-### 6.6 Performance
-
-The library must stay fast on large SCL files. The design keeps this property. Table 10 shows the work of the two functions.
-
-**Table 10: Work in a check function and a create function**
-
-| Work | Check function | Create function |
-|---|---|---|
-| Reads `Services` attributes | Yes | Yes, through the check function |
-| Counts existing elements | Yes | Yes, through the check function |
-| Creates elements | No | Yes |
-| Finds a connected `ConnectedAP` | Only when the caller requests the communication part | Yes |
-| Runs `macAddressGenerator` or `appIdGenerator` | No | Yes |
-| Clones an element | No | No |
-
-A check function does read-only queries. It allocates no element and runs no generator. The expensive parts stay in the create function.
-
-The library has this cost today. Each `create*` function calls its `canAdd*` function internally. A plugin that calls `canAdd*` and then `createX` already pays for two rounds of queries. This change does not add work. It changes the first round from `false` to `false` plus a reason.
-
-The double query occurs only when a caller runs both functions for one action. Rule 6 removes the allocation cost from that path. It does not remove the query cost.
-
-**Rules for the implementation:**
-
-1. **Query the smallest scope that answers the question.** Use `:scope` selectors. Do not query from the document root when the parent is sufficient.
-2. **No allocation in a check function.** No `createElement`, no `cloneNode`, no generator.
-3. **One check per create call.** The create function calls the check function one time.
-4. **No cache.** A cache needs a key from the document version. The DOM has no such version. A stale result causes a wrong edit, and an edit is worse than a slow query.
-5. **The host runs the check one time for each render.** A tooltip for ten buttons is ten checks, not one check for each mouse move.
-6. **The heaviest checks are known.** `checkInstantiateSubscriptionSupervision` reads `DataTypeTemplates`. `checkAddReportControl` counts all `ReportControl` instances. Measure these two first.
-7. **Measure before optimising.** Add one test with a large generated SCL file. Record the time of each check function and each create function. Set a budget: a check function costs less than the matching create function on the same fixture.
-
-**Rejected alternatives:**
-
-- **Cache the result of a check.** See rule 4.
-- **Pass the check result to the create function.** Example: `createX(parent, options, check)`. The library saves one round of queries. The risk is a stale result and an edit built on it. Revisit this option only if the measurement in rule 7 shows a problem.
-- **`skipCheck`.** It exists today for a caller that knows the state. It does not return a reason. Do not extend it.
-
-### 6.7 Risk of desynchronised functions
-
-Two functions that answer one question can disagree. This risk is real, and the current code already contains examples. Table 11 lists each cause, the evidence in the current code, and the countermeasure.
-
-**Table 11: Causes of disagreement and countermeasures**
-
-| # | Cause | Evidence in the current code | Countermeasure | Test |
-|---|---|---|---|---|
-| R1 | The two functions take different option shapes | `canAddReportControl(parent, {buffered: boolean})`. `createReportControl(parent, {rpt: {buffered: "true" \| "false"}})` | One normalised options type. Both functions use it. | Every combination of `buffered` and `instances` |
-| R2 | The create function drops options before the check | `createReportControl` calls `canAddReportControl(anyLn)` with no options. The call always uses `buffered: true` and `newInstances: 1`. | The create function passes the normalised options to the check function. | Create an unbuffered report and a report with `instances: "20"`. Compare with the check result. |
-| R3 | The two functions resolve the target element differently | The create functions use `parent.tagName === "LN0" ? parent : parent.querySelector("LN0, LN")`. A check function that uses `closest()` finds an ancestor instead. | One `targetFor(parent)` helper. Both functions use it. | An `LDevice` with two `LN` elements. A nested `AccessPoint`. |
-| R4 | One function changes the options object of the caller | `createGSEControl` and `createSampledValueControl` run `delete options.gse.apName` on the caller's object | Copy the options before a change | Call the check function and the create function with one options object, in both sequences |
-| R5 | The create function does not forward the policy | Not present today. Risk when `limitPolicy` is added. | The policy is part of the one options object | Run both policies for each family |
-| R6 | The document changes between the two calls | The host checks during a render and creates during a click | The create function checks again. Treat the check as advice and the create as the authority. | Document this rule. No test. |
-| R7 | A later change adds a condition to one function only | Not present today | Review rule: a new condition needs a reason code, a check test and an equivalence test | The equivalence test fails on the next run |
-
-R2 is a defect today. A buffered report with `instances: "20"` uses 20 report instances. The check adds 1 and compares that value with `max`. The function permits an edit that exceeds `max`. Table 13 must list this correction.
-
-**Minimum test set for the relation:**
-
-1. For each family and each fixture: `createX(...) === null` or `[]` is equal to `!checkX(...).allowed`.
-2. The same test with both policy values.
-3. The same test with the options that R1, R2 and R3 describe.
-4. The same test when the caller uses one options object for both calls.
-
-The review rule for R7 goes into the pull request template: "A new precondition in a create function needs a reason code and a check test in the same pull request."
-
-### 6.8 Counting rules
-
-A limit check needs one counting rule for each declared maximum. The schema gives the attribute. The schema does not give the unit. This draft states the unit for each attribute. Table 12 gives the rules.
-
-**Table 12: Counting rules**
-
-| Attribute | Quantity that the check counts | Evidence from Table 1 |
-|---|---|---|
-| `ConfReportControl@max` | `ReportControl` elements in the scope | 6 violations. Counting `RptEnabled@max` instances gives 72. |
-| `ConfReportControl@maxBuf` | `ReportControl` elements with `buffered="true"` | 6 violations |
-| `ConfDataSet@max` | `DataSet` elements for each `LDevice` in the scope | 0 violations |
-| `ConfDataSet@maxAttributes` | `FCDA` elements in one `DataSet` | No violation measured. The largest `DataSet` has 356 `FCDA`. |
-| `GOOSE@max` | `GSEControl` elements in the scope | 16 violations |
-| `SMVsc@max` | `SampledValueControl` elements in the scope | 0 violations |
-
-The report control rule is a defect correction. `numberReportControlInstances` sums `RptEnabled@max` and the check compares that sum with `max`. The study shows the result: 72 refusals against 6 under this rule. The library refuses valid edits in 24 of 120 files.
-
-`RptEnabled@max` defines the number of client instances of one report control block. It does not add report control blocks to the logical node.
-
-The library keeps the instance numbers in `details` (`buffered`, `unbuffered`, `requested`). A host can then show them. The check does not compare them with `max`.
-
-`reportControlCounts(parent)` is the helper for this rule. It counts elements and not instances.
-
-## 7. Policy for functions that fail without a reason
-
-1. **`null` and `[]` keep one meaning: no edit.** Do not change this behaviour. Do not add a second meaning.
-2. **Every function in Table 2 names the check function that gives the reason.** Either add the check function, or write the single cause in the function comment. Sequence: create functions first, then remove functions, then update functions.
-3. **A structural return is a filter, not a failure.** `updateDataSet` returns `[]` when the tag is not `DataSet`. This return filters a sequence of edits. Keep it. Add a reason only when the caller expects an edit and the library cannot make it.
-4. **No new `null`, `[]`, special value or boolean check.** New public functions return `CheckResult` or an edit. An incorrect call throws `SclError`.
-5. **Remove the special values from the internals.** The internal `max*` functions become one `servicesLimits()` result with `scope: "unbounded"` and `max?: undefined`. The public `maxAttributes` keeps its current values until the next major version. Section 12.1 gives the reason.
-6. **Table 2 becomes part of the README.** Add a test that each function in the table still exists and still has the documented return type. Then the table stays correct.
-7. **`createX` calls `checkX` one time. A caller does not call `checkX` before `createX`.** A caller that needs a reason or a disabled state calls `checkX` and discards the result at the next change. The check is a query, not a precondition. No function accepts a check result as an argument. Section 6.6 lists that option as rejected.
-
-## 8. Deprecation of the public boolean checks
-
-`canInstantiateSubscriptionSupervision` and `canAddFCDA` are public today. Keep both functions as thin deprecated functions:
-
-```ts
-/**
- * @deprecated Use {@link checkInstantiateSubscriptionSupervision}. The new function
- * gives the reason. This function stays until version 3.0.
- */
-export function canInstantiateSubscriptionSupervision(
-  supervision: Supervision,
-  options: SupervisionOptions = {
-    /* … */
-  },
-): boolean {
-  return checkInstantiateSubscriptionSupervision(supervision, options).allowed;
+export class SclError extends Error {
+  readonly reason: SclReasonDetails;
 }
 ```
 
-- The import path and the signature do not change.
-- The deprecated function calls the check function. The library has one implementation of each rule.
-- The deprecated function uses the library default policy. It has no separate behaviour. One default for the whole library is the only way to keep `can*` and `create*` in agreement. Section 13 states the consequence.
-- The `check*` function must obey `SupervisionOptions`: `checkEditableSrcRef`, `checkDuplicateSupervisions` and `checkMaxSupervisionLimits`. These options select the rules to apply. They do not change the reason report.
-- Do not deprecate `maxAttributes`. Make it a thin function that uses `servicesLimits()`. Remove the `-1` value in the next major version only.
-- Use this sequence: export `check*` and keep the old export in the same release, then add `@deprecated`, then remove the old function in version 3.0.
-- The functions `canAddDataSet`, `canAddGSEControl` and `canAddSampledValueControl` are not exported now. Export them before you deprecate them. A deprecated function that is not exported gives no migration path.
+### 3.4 Limits that a file does not declare
 
-## 9. Public API and README
+The option `limitPolicy` belongs to the operation. The check function and the create function accept the same option, under the same name, in the same options object.
 
-Add these items to `index.ts`:
+```ts
+const options = { limitPolicy: "permit" } as const;   // one setting in the host
 
-- `sclReason`, `SclReason`, `SclReasonDetails`
-- `CheckResult`, `SclError`
-- All `check*` functions
-- The old `can*` functions
+const check = checkAddDataSet(ln0, options);
+const edits = createDataSet(ln0, options);            // same object
+```
 
-Add a section "Checks and errors" to the README. The section contains:
+A host that sets the value is not affected by a change of default. A host that passes nothing gets the default of the installed version. D5 gives the decision on the default.
 
-- The result object shape.
-- The rule that `reason` holds a code and `details` holds the values.
-- The rule that the library contains no user text and no translations.
-- The rule for returned results and thrown errors.
-- The seven categories of concern and the rule for a new reason code (Section 5.1).
-- Table 2.
+| Situation | `permit` | `refuse` |
+|---|---|---|
+| No `Services` element, or no service element | Allowed, `limits.scope: "unbounded"` | `capability-undeclared` |
+| `max="0"` | `capability-zero` | `capability-zero` |
+| `max="12"`, 12 in use | `limit-reached` | `limit-reached` |
 
-This section is the first README content that is not about edit functions. State it clearly for this reason.
+The policy applies to one call. It never applies to a process. It has one axis: an undeclared limit. It does not change the structural, name or reference checks.
 
-## 10. Out of scope
+### 3.5 Order of reasons
 
-- User text, message catalogues, a `lang` option, `Intl` formatting. The host application owns the user text. In open-scd, `lit-localize` makes the translations. The `details` object gives the host application all values that it needs.
-- User interface concepts: buttons, tooltips, severity levels.
-- Changes to the signature of any edit function.
+The order is fixed. The first reason is the one that a row shows, so the order is part of the contract.
 
-## 11. Tests
+The rule for the order: **a reason that the user cannot correct in this operation comes before a reason that the user can correct here.** A message that asks the user to rename an element is wrong when the device cannot accept the element at all.
 
-- For each `can*` function, add a test that `check*(...).allowed === can*(...)`. Use the existing test data.
-- Add a test for each family with a fixture that has no `Services`, and with `limitPolicy: "refuse"`. This test reproduces the current refusal and proves the strict policy works.
-- For each reason code, add a test that checks the exact values in `details`.
-- For each element family, add a test with no `Services` element. The test must show `allowed: true` and `limits.scope: "unbounded"`.
-- For each element family, add the same test with `limitPolicy: "refuse"`. The test must show `reason: "capability-undeclared"`.
-- For each element family, add a test with a declared `max="0"`. The result must be a refusal in both policies.
-- For each element family, add a test with the `Services` element and without the attribute. The test must show the same result as the test without the `Services` element.
-- Add a test that `createX` returns `null` or `[]` only when `checkX(...).allowed` is `false`. Section 6.7 gives the minimum test set for this relation.
-- Add a test that one options object gives the same result when the caller passes it to the check function first and to the create function first (Table 11, R4).
-- Add a test for the requested-scope rule. `checkAddGSEControl` with a `gse` option and no `ConnectedAP` returns `target-missing`. The same call without the `gse` option returns `allowed: true`.
-- Add a test that `SclError` occurs for incorrect caller input.
-- Add a test for each category: a reason from the category returns `sclCategory(reason)` equal to the prefix.
-- Add a test for a declared `max="0"`: `reason` is `capability-zero` in both policies.
-- Add a test for the counting rule (Table 12): a file with one `ReportControl` and `RptEnabled max="20"` is within `max="4"`.
-- Add a test for the counting rule with `instances: "20"`: the create function reports one new control block.
-- Add one performance test with a large generated SCL file. Record the time of each check function and each create function. Section 6.6 rule 7 gives the budget.
+**Table 2: Order of reasons**
 
-## 12. Backward compatibility
+| Stage | Codes | Why this position |
+|---|---|---|
+| 1 | `target-missing`, `target-kind`, `target-invalid`, `target-detached` | There is no place for the operation. Suppression usually leaves this reason alone. |
+| 2 | `capability-zero`, `capability-mode`, `capability-invalid` | The device or the file forbids the operation. The user cannot correct it in this dialog. |
+| 3 | `capability-undeclared` | Only with `limitPolicy: "refuse"`. The file does not declare the capability. The user cannot correct it in this dialog. |
+| 4 | `identity-name-taken`, `identity-id-taken`, `identity-instance-conflict`, `identity-already-present` | The user corrects it here: choose another name, id or instance. |
+| 5 | `reference-missing`, `reference-in-use`, `reference-duplicate` | The user corrects it here, or chooses another target. |
+| 6 | `limit-reached`, `limit-buffered-reached`, `limit-unbuffered-reached`, `limit-attributes-reached` | The user must free space or choose another parent. This is more work than a rename. |
+| 7 | `mapping-missing`, `mapping-missing-gse`, `mapping-missing-smv` | The caller requests the communication part. The correction is work in `Communication`. |
+| 8 | `restriction-mismatch`, `restriction-not-editable` | The request conflicts with the data or with the editability rules of the file. Often the answer is a different source, not a change. |
 
-### 12.1 What stays the same
+`restriction-undeclared` never causes a refusal, so it has no position.
 
-These items do not break a consumer:
+`capability-zero` is at stage 2 for a reason. If the name is in use and GOOSE has `max="0"`, a message about the name sends the user to rename, and the next attempt fails again. The capability reason comes first because it cannot be fixed here. A zero declaration cannot occur together with a limit reason or with `capability-undeclared`, so a scope never shows two capability reasons for one service.
 
-- All new exports and all new options. `limitPolicy` is optional in every options object.
-- All existing signatures. No parameter changes and no return-type changes.
-- `null` and `[]` keep their meaning: no edit. No existing function starts to throw. `skipCheck` keeps its meaning.
-- `maxAttributes` keeps its exact current values and its `{max: number; scope: string}` type. The new `servicesLimits()` is a second reader. Do not rewrite `maxAttributes` on top of it in this release.
-- Deprecated functions keep their import path and their signature.
+Two placements are open for comment:
 
-### 12.2 What changes behaviour
+1. `identity` before `reference`. Both are local. A rename is cheaper than the creation of a `DataSet`.
+2. `limit` after `reference`. If the `DataSet` does not exist and the limit is full, both block. The limit could come first, because the creation of the `DataSet` would fail. This proposal puts the limit after the reference and before the mapping.
 
-The default policy `permit` changes the result of existing public functions. Table 13 lists them.
+Rules:
 
-**Table 13: Behaviour changes caused by the default policy**
+1. `all: true` returns `reason` first and the other reasons in the same order. `reasons[0]` is always `reason`.
+2. A rule whose precondition failed produces no reason and takes no position.
+3. A host must not re-sort the list for the value of `reason`. A host can sort for display.
+4. A test asserts the full sequence for a fixture with four reasons. A change of the order belongs in the release notes.
 
-| Public function | Condition | Result before | Result after |
+## 4. Categories of concern
+
+The schema has four kinds of constraint: `xs:unique`, `xs:key`, `xs:keyref` and the type restrictions. IEC 61850-6 adds the capability rules and the semantic rules. Each reason code belongs to one of seven categories.
+
+| Category | Question | Blocks the operation? |
+|---|---|---|
+| `target` | Is there a valid place for the element? | Always |
+| `capability` | Does the device declare the service, and with which maximum? | `zero`, `mode` and `invalid` always. `undeclared` follows `limitPolicy` |
+| `limit` | Is the element within the declared maximum? | Always |
+| `identity` | Does another element use the same name, id or instance? | Always |
+| `reference` | Does the pointer have a target, and is the target still unused? | Always |
+| `mapping` | Does `Communication` cover the control block? | Only when the caller requests the part |
+| `restriction` | Is the data compatible with the request? | `mismatch` and `not-editable` always. `undeclared` never |
+
+Rules:
+
+1. The first part of a code is its category. Example: `limit-buffered-reached`.
+2. A new code needs a category, a source and a test.
+3. A supervision rule uses these categories. It does not need a new category.
+4. One vocabulary serves the `check*` functions and the document check.
+
+Appendix D gives all 25 codes, their fields, their source and the rule for choosing one.
+
+## 5. Decisions
+
+Each decision starts with the question. It then gives the options and our preferred answer. Reply with the number and the letter.
+
+### 5.1 Summary
+
+**Table 3: Decisions**
+
+| # | Question | Preferred | Cost of the other option |
 |---|---|---|---|
-| `canAddFCDA` | No `ConfDataSet` or no `maxAttributes` | `false` | `true` |
-| `canInstantiateSubscriptionSupervision` | No `Services > SupSubscription` maximum | `false` | `true` |
-| `canAddDataSet`, `canAddGSEControl`, `canAddReportControl`, `canAddSampledValueControl` | No `Services` element or no attribute | `false` | `true`. Not exported today; exported by this change. |
-| `createDataSet`, `createReportControl` | No `Services` element or no attribute | `null` | An edit |
-| `createGSEControl`, `createSampledValueControl` | No `Services` element or no attribute | `[]` | An edit |
-| `instantiateSubscriptionSupervision`, `insertSubscriptionSupervisions` | No `SupSubscription` maximum | `null` | An edit |
-| `createGSEControl`, `createSampledValueControl` | A `gse` or `smv` part is requested and no `ConnectedAP` exists | Control block insert only | `[]`. The check function refuses with `target-missing`. Section 6.4 gives the rule. |
-| `createReportControl` | `rpt.buffered` is `"false"`, or `instances` is greater than 1 | The check always uses `buffered: true` and one instance (Table 11, R2) | The check uses the requested values. The function can refuse an edit that it permits today. |
-| `canAddReportControl`, `createReportControl` | Any file where `RptEnabled@max` is greater than 1 | Instances are compared with `max` and `maxBuf` | Control blocks are compared with `max` and `maxBuf` (Table 12). The function permits edits that it refuses today, and it can refuse an edit with a large `instances` value. |
+| D1 | Add a check function, or change the create function? | Add a check function | Breaks every call site |
+| D2 | One reason vocabulary, or one for each family? | One vocabulary for all families | One `switch` for each family in each host |
+| D3 | Does the library return user-facing text with a refusal? | Yes, one English sentence | The host writes every message |
+| D4 | Does a refusal throw, or return a result? | Return it. Throw only for an incorrect call | `try`/`catch` around a disabled button |
+| D5 | Which default for an undeclared limit, and in which release? | `refuse` in 2.x, `permit` in 3.0 | Half of the sample becomes uneditable, or 2.1 carries a second behaviour change |
+| D6 | What is the option called? | `limitPolicy` | `strict` promises rules that the option does not apply |
+| D7 | Refuse an addition above a declared maximum, or warn? | Refuse | An edit that the device cannot accept |
+| D8 | Is a missing requested part a refusal or a warning? | Refusal | A second result shape |
+| D9 | Replace the names in a major release, or add new names in a minor? | New names, minor release | A behaviour change under the old names |
+| D10 | How many pull requests deliver 2.1? | Three | One large review |
+| D11 | Does `maxAttributes` change its type in 2.x? | No. Correct only the undeclared branch | A wrong value of `max` |
+| D12 | Does the check answer `name` and `datSet`? | Yes | Two of four causes stay unexplained |
+| D13 | Does `checkRemove*` ship in 2.1, and does it take `force`? | After 2.1, without `force` | A `force` dialog with no reason |
+| D14 | When does `create*` read the report options? | `check*` in 2.1, `create*` in 3.0 | `check*` and `create*` disagree on `maxBuf` |
+| D15 | Does the report limit count blocks or instances, and when? | Blocks, in 2.1 | 72 wrong refusals in 24 files |
 
-A consumer sees the change only on a file that does not declare the limit. A file with a complete `Services` section gives the same result as before.
+### 5.2 D1. API shape
 
-The change affects two further items:
+**Question:** Should the library add a check function beside each create function, or make the create function return both the result and the edits?
 
-- `tGSE/canAddSampledValueControl.ts` is deleted. A consumer that deep-imports this file breaks. No file imports it and no export references it.
-- `tReportControl/canAddReportControl.ts` and the other `canAdd*` modules stay at their paths. This change moves no file.
+- **A.** One check function beside each create function.
+- **B.** One return value for each operation. `createX` returns `{ ok, edits }` or `{ ok: false, reason }`.
+- **C.** One function name with overloads.
 
-### 12.3 Rules for this release
+Option A keeps the create function as the only builder of an edit. Option B breaks every call site and hides a partial edit set. Option C gives one name two behaviours.
 
-1. **One default policy for the whole library.** `can*`, `check*` and the create functions agree at all times. Do not pin the old behaviour in the deprecated functions. Two behaviours for one question is worse than one declared change.
-2. **No new failure mode for existing callers.** An existing function does not start to throw. `SclError` occurs only in the new `check*` functions, and only for incorrect input.
-3. **No type change to an existing export.** `maxAttributes` and `SupervisionOptions` keep their types. New optional fields are the only extension.
-4. **A consumer restores the old behaviour with one option.** `limitPolicy: "refuse"` gives the strict result. This is the migration path for a consumer that must keep the old refusal.
-5. **The changelog states the behaviour change in the first paragraph.** Do not hide it in a list of features.
+**Preferred answer: A.**
 
-### 12.4 Release vehicle
+### 5.3 D2. Reason vocabulary
 
-The behaviour change in Table 13 breaks semantic versioning. Select one option:
+**Question:** Should all element families share one reason vocabulary, or should each family have its own?
 
-- **Option A (recommended): release 3.0.0.** The strict option is available in the same release. A consumer that wants the old behaviour sets `limitPolicy: "refuse"` one time.
-- **Option B: release 2.1.0 and treat the current refusal as a defect.** Argument: the library invents a constraint that the file does not declare. Cost: `^2` consumers get the new behaviour without a version change. The changelog must state the change in the first paragraph.
+- **A.** One vocabulary for all element families.
+- **B.** One enum for each family.
+- **C.** Global codes for the structural problems and family codes for the limits.
 
-Release-please reads the commit message. Use `feat!:` or a `BREAKING CHANGE:` footer for Option A.
+Option A needs one `switch` in the host. Option B needs one `switch` for each family. Option C needs two vocabularies.
 
-## 13. Decisions and open questions
+**Preferred answer: A.**
 
-### 13.1 Decided in this draft
+### 5.4 D3. Text
 
-1. **The default policy permits an undeclared limit.** A file without `Services`, or without one attribute, does not prevent an edit. The caller can set `limitPolicy: "refuse"` for the strict behaviour. Table 5 gives the rules.
-2. **The policy applies to one call and has one axis.** The library has no global setting, and it has no general `strict` mode.
-3. **The library contains no user text and no translations.** The host application makes the messages. See section 10.
-4. **The check function answers for the same scope as the request.** A part that the caller does not request is not a failure. Section 6.4 gives the rule.
-5. **One function name has one behaviour.** Do not use overloads to add a second return type. Section 6.5 gives the reason.
-6. **Seven categories of concern hold every reason code.** Section 5.1 gives the categories, the codes and their sources.
-7. **The check counts elements and not instances for `ConfReportControl`.** Section 6.8 gives the counting rules and the evidence.
+**Question:** Should a refusal contain user-facing text, and if yes, in which form?
 
-### 13.2 Decisions for the reviewers
+- **A.** No text in the library. The host makes the message from the fields.
+- **B.** A `lang` parameter and translated sentences in the library.
+- **C.** One English sentence in `reasonText`. The library builds the sentence from the same fields. No `lang`.
 
-Each decision gives the options and our preferred answer. Reply with the decision number and the letter. A reply can also propose a new option.
+Option C gives a fallback that needs no work in the host. It keeps one source for the sentence. A host can still write its own text. Option B adds a translation system to a library that returns a diff.
 
-The option letters are not ordered by merit. In most decisions we list our preferred answer first, so it carries the letter A. Review each option on its own.
+**Preferred answer: C.** This answer changed from A during the review. The objection from Christian Dinkel was against translation in the library. One English sentence is not a translation system, and no locale code enters the API.
 
-**Table 14: Summary of the decisions**
+### 5.5 D4. Throwing
 
-| # | Decision | Our preferred answer | Main cost of the alternative |
-|---|---|---|---|
-| D1 | API shape | Check functions | Breaks every call site |
-| D2 | Reason vocabulary | One global `SclReason` | One `switch` for each family in every host |
-| D3 | Text and translation | No text in the library | Translation and number formatting inside the library |
-| D4 | Throwing | Return a refusal, throw only for an incorrect call | `try`/`catch` for a disabled button |
-| D5 | Undeclared limit | `permit` | A file without `Services` becomes impossible to edit |
-| D6 | Option name | `limitPolicy` | The name suggests more rules than the option applies |
-| D7 | Declared maximum | Refuse | An edit that the device cannot accept |
-| D8 | Partial result | Requested-scope rule | Two result shapes to document and test |
-| D9 | Release vehicle | 3.0.0 | `^2` consumers get a behaviour change |
-| D10 | First pull request | Error model, six checks, wrappers, README | A later pull request for each family |
-| D11 | `maxAttributes` | Change in 3.0 | Breaking return type in a minor release |
-| D12 | Check reads `name` and `datSet` | Yes | The create function stays the only place with the full answer |
-| D13 | `checkRemove*` now | Later | A user interface for `force` waits |
-| D14 | Correct the `ReportControl` check | In this release | The new API repeats a known defect |
-| D15 | Counting rule for `ConfReportControl` | Elements, not instances | 72 false refusals in 24 of 120 files |
-
-#### D1. API shape
-
-- **A.** A check function next to each create function. Section 6.3.
-- **B.** One return value for each operation. Section 6.3.
-- **C.** One function name with overloads. Section 6.5.
-
-**Preferred answer: A.** It keeps the create function as the only builder of edits, and a partial edit set stays visible.
-
-#### D2. Reason vocabulary
-
-- **A.** One global `SclReason` for all families.
-- **B.** One enum for each element family, as in the example from Stephen Renwick.
-- **C.** Global codes for structural problems, family codes for limits.
-
-**Preferred answer: A.** The host writes one message for each reason, not one for each element family.
-
-#### D3. Text and translation
-
-- **A.** No text in the library. The `details` object holds the values.
-- **B.** Text in the library with a `lang` option, as Harald Brabenetz proposed.
-- **C.** A reason code plus an English template shipped as data.
-
-**Preferred answer: A.** The host owns the text and the translation. The library keeps one machine-readable answer.
-
-#### D4. Throwing
+**Question:** Should a refusal throw an error, or return a result? When should the library throw?
 
 - **A.** Return a refusal. Throw `SclError` only for an incorrect call.
-- **B.** Never throw. Every failure is a result.
-- **C.** Throw for every failure.
+- **B.** Never throw.
+- **C.** Throw for each failure.
 
-**Preferred answer: A.** A disabled button is an expected condition, not an exception.
+**Preferred answer: A.**
 
-#### D5. Default for an undeclared limit
+### 5.6 D5. Default for an undeclared limit
 
-- **A.** `permit`. A file that declares no maximum does not prevent an edit.
-- **B.** `refuse`. The library refuses the addition.
+**Question:** Which default applies to a limit that the file does not declare, and in which release does the default change?
 
-**Preferred answer: A.** The library must not refuse an edit because a file omits an optional element.
+The default decides the result for a caller that passes no `limitPolicy`. The evidence sets the target. The schema makes `Services` optional, and 58 of 120 files use a service that they do not declare. A `refuse` default blocks edits in half of the sample. The target default is `permit`.
 
-#### D6. Name of the policy option
+The options differ in **when** that default applies.
+
+| Option | 2.x | 3.0 | Behaviour changes in 2.1 |
+|---|---|---|---|
+| **A.** `permit` from 2.1 | `permit` | `permit` | Two: the counting rule and a new permission |
+| **B.** Change at the major version | `refuse` | `permit` | One: the counting rule |
+| **C.** `refuse` in all versions | `refuse` | `refuse` | One: the counting rule. `permit` is always opt-in. |
+
+- **A.** One default in all versions, from 2.1.
+- **B.** `refuse` in 2.x, `permit` in 3.0.
+- **C.** `refuse` in all versions.
+
+**Preferred answer: B.** Three reasons:
+
+1. The target default is `permit`, because the file states its own capability and the schema does not require `Services`.
+2. A change of default is a behaviour change. Version 2.1 must carry one behaviour change only, the counting fix in D15. Option A puts a second change into the same minor release. In a file that shows a disabled button today, the button starts to work, with no change in the host.
+3. A caller that sets `limitPolicy` is not affected by the change. A host that prepares files for a known device keeps `refuse`. A host that edits any file sets `permit` one time, in one place.
+
+Option C keeps the safest default but contradicts the schema and the measurement. It also makes the option mandatory knowledge for every plugin author who opens a file without `Services`.
+
+### 5.7 D6. Name of the policy option
+
+**Question:** What should the option for an undeclared limit be called?
 
 - **A.** `limitPolicy: "permit" | "refuse"`.
 - **B.** `strict: boolean`.
 - **C.** `undeclaredLimit: "permit" | "refuse"`.
 
-**Preferred answer: A.** The name states the one thing that the option changes.
+**Preferred answer: A.** The name shows the one item that the option changes.
 
-#### D7. Declared maximum
+### 5.8 D7. Declared maximum
+
+**Question:** Should the library refuse an addition above a declared maximum, or permit it and report a warning?
 
 - **A.** Refuse an addition above a declared maximum.
 - **B.** Permit it and report a warning.
 
-**Preferred answer: A.** A declared maximum is a device capability. An edit above it produces a file that the device cannot accept.
+**Preferred answer: A.**
 
-#### D8. Partial result
+### 5.9 D8. Partial result
 
-- **A.** The requested-scope rule only. Section 6.4.
-- **B.** The rule plus the `incomplete` field on a permitted result.
-- **C.** A third value in `allowed`, for example `allowed: "partial"`.
+**Question:** When the caller requests a communication part and the file cannot provide it, should the result be a refusal or a warning?
 
-**Preferred answer: A.** The rule gives a correct answer without a second result shape.
+A `GSEControl` request with a `gse` option and no `ConnectedAP` produces the control block only.
 
-#### D9. Release vehicle
+- **A.** The check answers for the requested scope. A requested part that is not possible causes a refusal.
+- **B.** Option A plus an `incomplete` field on a permitted result.
+- **C.** A third value in `allowed`.
 
-- **A.** Version 3.0.0. Table 13 lists the behaviour changes.
-- **B.** Version 2.1.0. The changelog states the behaviour change in the first paragraph.
+**Preferred answer: A.** Option B stays available for a host that wants a warning.
 
-**Preferred answer: A.** The behaviour change in Table 13 breaks semantic versioning.
+### 5.10 D9. Release vehicle
 
-#### D10. Content of the first pull request
+**Question:** Should the new API replace the existing function names in a major release, or arrive under new names in a minor release?
 
-- **A.** `foundation/errors.ts`, `servicesLimits()`, the six `check*` functions, the deprecated wrappers, the README section, and the removal of the dead file.
-- **B.** The error model and `checkAddReportControl` only. One family proves the shape.
-- **C.** A plus `checkRemove*` and `checkUpdate*`.
+- **A.** 3.0.0. Correct the rules under the existing names.
+- **B.** 2.1.0. Add new `check*` names. Keep the old names, deprecate them and remove them in 3.0.
 
-**Preferred answer: A.** The shape of the API is one decision. Review it one time.
+**Preferred answer: B.** A new name makes the addition additive. The one behaviour change is D15, and it is a fix.
 
-#### D11. `maxAttributes`
+### 5.11 D10. Pull requests
 
-- **A.** Keep the current values and type. Align it in version 3.0.
-- **B.** Change it in this release to `{max?: number; scope: ...}`.
+**Question:** How many pull requests should deliver 2.1, and what does each one contain?
 
-**Preferred answer: A.** The return type of an exported function must not change in the current major version.
+- **A.** One pull request: error model, six checks, wrappers and README.
+- **B.** Three pull requests: the counting fix; the error model and the checks; the removal of the dead file.
+- **C.** One pull request for each element family.
 
-#### D12. Does the check read `name` and `datSet`?
+**Preferred answer: B.** The counting fix is a behaviour change and needs a separate review. The six checks are mechanical after the vocabulary is agreed. Option C gives six review cycles for one shape.
 
-- **A.** Yes. The check gives a complete answer: structure, name, reference and limit.
-- **B.** Limits only. The create function stays the only place that checks the name and the reference.
+### 5.12 D11. `maxAttributes`
 
-**Preferred answer: A.** It answers all four causes of the same refusal.
+**Question:** Should the exported `maxAttributes` change its return type in 2.x, and what should its undeclared branch return?
 
-#### D13. `checkRemove*` in this release
+- **A.** Keep the `{max: number}` type. The undeclared branch returns `-1` with `scope: "unbounded"`, not the current count.
+- **B.** Change the type to `{max?: number}` now.
 
-- **A.** Later. The `removeDataType` case needs a reason for `force`.
+**Preferred answer: A.** Option B changes the return type of an exported function in a minor release.
+
+### 5.13 D12. Does the check read `name` and `datSet`?
+
+**Question:** Should a check answer only the limits, or also the name and the `datSet` reference?
+
+- **A.** Yes. Structure, name, reference and limit.
+- **B.** Limits only.
+
+**Preferred answer: A.**
+
+### 5.14 D13. `checkRemove*` in this release
+
+**Question:** Should `checkRemove*` ship in 2.1, and should it accept a `force` parameter?
+
+- **A.** After 2.1. The check has no `force` parameter. `allowed: false` with `reference-in-use` means that the user must confirm.
 - **B.** `removeDataType` only.
 - **C.** All remove functions.
 
-**Preferred answer: A.** No consumer asks for it yet. Add it when a user interface needs `force`.
+**Preferred answer: A.** A check that takes `force` has nothing to report. Appendix E gives the shape.
 
-#### D14. Correct the `ReportControl` check in this release
+### 5.15 D14. Report check options
 
-`createReportControl` calls `canAddReportControl(anyLn)` without options. The call ignores `rpt.buffered` and `instances` (Table 11, R2). The create function can exceed `max` or `maxBuf`.
+**Question:** When should `createReportControl` read the options that `checkAddReportControl` already reads?
 
-- **A.** Correct it in this release. The check uses the requested `buffered` value and the requested instance count.
-- **B.** Separate pull request before the check functions.
-- **C.** Correct it in version 3.0 with the other behaviour changes.
+`createReportControl` calls `canAddReportControl(anyLn)` with no options. It ignores `buffered` and `instances`.
 
-**Preferred answer: A.** New callers must not receive an API that repeats a known defect. The correction belongs in Table 13.
+- **A.** `check*` reads the options in 2.1. `create*` reads them in 3.0.
+- **B.** Both read them in 2.1.
+- **C.** Both read them in 3.0.
 
-#### D15. Counting rule for `ConfReportControl`
+**Preferred answer: A.** The difference is small: an unbuffered create when `maxBuf` is full. Appendix C lists the difference.
 
-- **A.** Count `ReportControl` elements against `max` and `maxBuf` (Table 12).
-- **B.** Count `RptEnabled@max` instances, as `numberReportControlInstances` does today.
-- **C.** Count elements by default and give the host an option to count instances.
+### 5.16 D15. Counting rule for `ConfReportControl`
 
-**Preferred answer: A.** The files in the study use the element rule. The instance numbers stay visible in `details`.
+**Question:** Should a report limit count control blocks or client instances, and in which release should the rule change?
 
+- **A.** Count `ReportControl` elements against `max` and `maxBuf`, in 2.1, for `check*`, `can*` and `create*`.
+- **B.** Count `RptEnabled@max` instances, as the library does today.
+- **C.** Count elements by default and give the host an option for instances.
 
-## Appendix A. Full measurement table
+**Preferred answer: A.** This change is a fix, not a policy. It removes refusals and adds none. Appendix C gives the counts.
 
-Table 15 adds the rows that Section 2.1 omits for length.
+## 6. Release plan
 
-**Table 15: Additional measurements**
+| Release | Content | Behaviour change |
+|---|---|---|
+| 2.1.0 | Counting fix and internal `servicesLimits()`; error model and six `check*`; `limitPolicy` on the create functions; `@deprecated` on `canAddFCDA` and `canInstantiateSubscriptionSupervision`; README section; removal of the dead file | Report limits count blocks. `limitPolicy` defaults to `refuse`. |
+| 3.0.0 | `limitPolicy` defaults to `permit` in both functions (D5); `create*` reads the report options (D14); removal of the deprecated functions; `maxAttributes` returns `{max?: number}` | A file that declares no limit becomes editable |
+
+The four `canAdd*` functions that `index.ts` does not export get no deprecation. A plugin cannot import them. They are removed in 3.0, when the new functions are available.
+
+Compatibility rules:
+
+1. `null` and `[]` keep one meaning: no edit.
+2. No existing function starts to throw.
+3. No existing type changes in 2.x.
+4. A host must not mix generations for one control. `check*` with `create*` is supported. `check*` with `can*` is not.
+
+## Appendix A. Evidence: method and full table
+
+**Table 4: All conditions in the sample**
 
 | Condition | Count | Files |
 |---|---|---|
+| IED with no `Services` element | 83 of 676 | — |
+| IED that uses a service that it does not declare | `SMVsc` 163, `GOOSE` 24, `ConfDataSet` 29, `ConfReportControl` 5 | 58 of 120 |
+| Service declared with `max="0"` | `GOOSE` 44, `SMVsc` 12 | — |
+| `SupSubscription` with `maxGo` or `maxSv` equal to 0 | 254 of 397 | — |
+| Scope above `ConfReportControl@max`, instances counted | 72 | 24 |
+| Scope above `ConfReportControl@max`, blocks counted | 6 | 2 |
+| Scope above `GOOSE@max` | 16 | — |
 | Scope above `ConfDataSet@max` | 0 | — |
-| `GSEControl` against `GSE` elements in `Communication` | 1,579 against 1,265 | — |
-| `SampledValueControl` against `SMV` elements in `Communication` | 403 against 337 | — |
+| Control block with no `ConnectedAP` | `GSE` 31, `SMV` 55 | 18 |
+| `GSEControl` against `GSE` elements | 1,579 against 1,265 | — |
+| `SampledValueControl` against `SMV` elements | 403 against 337 | — |
+| `lnType` without a `LNodeType` | 27 ids, 69 uses | 17 |
+| `datSet` without a `DataSet` | 9 | 8 |
+| `iedName` without an `IED` | 43 ids | 4 |
 | DataTypeTemplates reference without a target | 12 | 3 |
-| Duplicate `ConnectedAP` (`iedName` and `apName`) | 22 | 6 |
+| Duplicate `ConnectedAP` | 22 | 6 |
 | Duplicate `LDevice inst` in one `IED` | 0 | — |
-| `Services` element with a declared service that has no `max` | 1 | 1 |
+| `ExtRef` with `pDO` | 9,294 of 40,321 | 49 of 103 have none |
+| `Private` element | 76,612 | 102 of 120 |
+| Service element without `max` | 1 | 1 |
 
-## Appendix B. Method of the study
+Method:
 
-The study read the SCL files that users open, not the test fixtures of the library.
+- Population: 716 files with the extension `.scd`, `.cid` or `.icd`, from 20 kB to 60 MB, in three local collections.
+- Sample: 120 files at a fixed interval from the sorted list, plus the four largest files.
+- Schema: `IEC_61850-6.2018.SCL.2007B4.full`, including `xs:unique`, `xs:key` and `xs:keyref`.
+- Editions: 117 files with `version="2007"`. 3 files have no `version` attribute.
+- Reader: one pass. The reader does not change a file.
+- Size of the sample: 676 IED, 9,986 `ReportControl`, 1,579 `GSEControl`, 403 `SampledValueControl`, 3,116 `DataSet`, 63,323 `FCDA`, 40,321 `ExtRef`.
 
-- Collections: three local directories with project files, vendor files and test material.
-- Population: 716 files with the extension `.scd`, `.cid` or `.icd`, between 20 kB and 60 MB.
-- Sample: 120 files at a fixed interval over the sorted list, plus the four largest files.
-- Size of the sample: 676 **IED**, 9,986 `ReportControl`, 1,579 `GSEControl`, 403 `SampledValueControl`, 3,116 `DataSet`, 63,323 `FCDA`, 40,321 `ExtRef`, 76,612 `Private`.
-- Schema: `IEC_61850-6.2018.SCL.2007B4.full`. The study used `xs:unique`, `xs:key` and `xs:keyref`.
-- Editions: 117 files with `version="2007"`, 3 files with no `version` attribute.
-- Parser: a one-pass streaming reader. It does not change the files.
+## Appendix B. All reasons and aggregation
 
-Limits of the study:
+`check*` returns the first reason. The option `all: true` returns each reason that is defined for the same options. Both use one walker. For this reason, `reason` is always `reasons[0]`.
 
-1. The sample is not a random sample of all SCL in the world. It is a sample of the files available on one machine.
-2. The study counts a condition. It does not decide which party is correct. A maximum that a real file exceeds can be a fault in the file or a different reading of the standard.
-3. The report control rows (Table 1 and Table 12) show the difference between two readings of `ConfReportControl@max`. The study does not settle the reading. Decision D15 asks the reviewers to settle it.
+### B.1 Independent reasons
+
+```ts
+checkAddReportControl(ln0, { all: true, rpt: { name: "rptA", datSet: "DS1" } })
+// reasons:
+//   identity-name-taken   the name "rptA" is in use
+//   reference-missing     the DataSet "DS1" does not exist
+//   limit-reached         current 15, max 15
+```
+
+The user sees three remedies in one dialog. With the first reason only, the user changes the name and gets a second refusal.
+
+`capability-zero` is the important case in `checkAddGSEControl`. It tells the user that this IED cannot accept the element. The first reason alone does not show this.
+
+### B.2 Aggregation
+
+The library collects repeated reasons into one reason. The reason contains the complete set of affected elements. The sentence contains the count.
+
+```ts
+checkLNodeTypeUpdate(updated, doc, { all: true })
+// reasons:
+//   reference-in-use  kind "fcda",      affected: [412 FCDA]
+//   reference-in-use  kind "extref",    affected: [87 ExtRef]
+//   reference-in-use  kind "sourceref", affected: [6 SourceRef]
+```
+
+```ts
+export type ReferenceKind = "fcda" | "extref" | "sourceref";
+
+export type RemovedData = {
+  path: string;                            // "Pos.stVal"
+  tag: "DO" | "SDO" | "DA" | "BDA";
+};
+
+export type ReferenceInUse = {
+  key: "reference-in-use";
+  tag: "LNodeType" | "DOType" | "DAType";
+  kind: ReferenceKind;
+  removed: RemovedData[];
+  affected: Element[];
+  reasonText: string;
+};
+```
+
+The library makes one reason for each reference kind. It does not make one reason for each reference. `affected` is complete. The count is `affected.length`. The library does not build 412 location strings for a message that needs only the number.
+
+`checkLNodeTypeUpdate` is a separate issue. It needs no new category. It uses `reference-in-use` with a `kind` field.
+
+### B.3 Suppression
+
+A rule that cannot start does not make a reason.
+
+- No `LN0` gives `target-missing` only. It does not give the name, reference and limit reasons.
+- `max="0"` gives `capability-zero` only. It does not also give `limit-reached`.
+- A wrong tag gives `target-kind` only.
+- No `Services` with `refuse` gives one `capability-undeclared`. It does not give four limit reasons.
+
+### B.4 `anyOf` operations
+
+The question "can this IED accept a `DataSet`?" is a search through the `LDevice` elements. The answer is yes when one device has space.
+
+```ts
+// failure: one reason, not one reason for each device
+{ key: "limit-reached", tag: "DataSet", scope: "IED",
+  current: 156, max: 12, affected: [13 LDevice], reasonText:
+  "All 13 logical devices have reached ConfDataSet@max (12)." }
+```
+
+13 reasons would report a failure for an operation that succeeds when one device has space. They would also show 13 remedies that do not exist.
+
+### B.5 Where to use `all: true`
+
+| Operation | All reasons? | Reason |
+|---|---|---|
+| Add a `DataSet`, `GSEControl`, `ReportControl` or `SampledValueControl` | Yes | Three or four independent remedies |
+| Instantiate a supervision | Yes | Four independent remedies |
+| `checkLNodeTypeUpdate` | Yes, the main use | Flat reasons with aggregation |
+| Add a `DataSet` to an `IED` | One collected reason | A search, not a list |
+| `subscribe` with more than one connection | No | One result for each connection |
+
+## Appendix C. Implementation notes
+
+### C.1 Counting rules
+
+| Attribute | Counted as |
+|---|---|
+| `ConfReportControl@max` | `ReportControl` elements in the scope |
+| `ConfReportControl@maxBuf` | `ReportControl` elements with `buffered="true"` |
+| `ConfDataSet@max` | `DataSet` elements in each `LDevice` |
+| `ConfDataSet@maxAttributes` | `FCDA` elements in each `DataSet` |
+| `GOOSE@max` | `GSEControl` elements in the scope |
+| `SMVsc@max` | `SampledValueControl` elements in the scope |
+
+`RptEnabled@max` counts the client instances of one block. It does not add a block to the logical node. The schema does not limit it through `Services`.
+
+`numberReportControlInstances` becomes dead code. Delete it with its test. `maxReportControl` is internal. `servicesLimits()` replaces it.
+
+### C.2 The one difference in 2.x
+
+| Behaviour | 2.x | 3.0 |
+|---|---|---|
+| Counting rule | blocks, in both functions | blocks |
+| `limitPolicy` | accepted by both functions. Default `refuse`. | accepted by both functions. Default `permit`. |
+| Report options | `check*` reads them. `create*` ignores them. | both read them |
+
+The last row is the only difference between the two functions. It affects one case: an unbuffered create when `maxBuf` is full. `limitPolicy` is not a difference: the caller passes one options object to both functions.
+
+### C.3 Functions that can disagree
+
+| Cause | Countermeasure |
+|---|---|
+| Different option shapes | One normalised options type |
+| Options lost before the check | The create function passes the same options |
+| Different target resolution | One `targetFor(parent)` helper |
+| The caller's options are changed | Copy the options before a change |
+| The document changes between the calls | The create function checks again. The check is advice. |
+
+The test that keeps the relation:
+
+```ts
+expect(createReportControl(ln, options) === null)
+  .to.equal(!checkAddReportControl(ln, options).allowed);
+```
+
+### C.4 Performance
+
+A check reads. It does not create an element, start a generator or clone a node. The expensive work stays in the create function.
+
+1. Select the smallest scope. Use `:scope` selectors.
+2. Do not allocate, generate or clone in a check.
+3. Run one check for each create call.
+4. Do not cache. The DOM has no version number for the cache key.
+5. Run the check one time for each render. Do not run it for each mouse movement.
+
+### C.5 Caller protocol
+
+`createX` calls `checkX` one time. A caller does not call `checkX` before `createX`. A caller that needs a reason or a disabled button calls `checkX` and discards the result after the next change. No function accepts a check result as an argument.
+
+### C.6 Text rules
+
+- The factory builds the sentence from the fields. Write the sentence one time only.
+- Use British English, full stops and no abbreviations.
+- Use one small helper for English plurals. Do not use `Intl`.
+- The wording is not API. The codes are stable, but the prose can change in a minor release. A test in a plugin must check the fields, not the sentence.
+- Do not add an override hook and do not add `lang`. A host that wants another language ignores `reasonText`.
+
+### C.7 Tests
+
+- `checkX(...).allowed === canX(...)` for each family and each test file.
+- `createX(...) === null` or `[]` is equal to `!checkX(...).allowed`.
+- One test for each reason code. Check the exact fields.
+- One test for each family with no `Services`, and the same test with `limitPolicy: "refuse"`.
+- One test for `max="0"`: `capability-zero` in both policies.
+- One test for the counting rule: one block with `RptEnabled max="20"` is within `max="4"`.
+- One test for `all: true`: `reason` is equal to `reasons[0]`.
+- One test for the order in Section 3.5: a fixture with four reasons returns them in the documented sequence.
+- One test with one options object for both calls, in both orders.
+- One performance test on a large test file.
+
+## Appendix D. Reason codes
+
+```ts
+type TargetMissing = { key: "target-missing"; tag: string; reasonText: string };
+type LimitReached = { key: "limit-reached"; tag: string; scope: LimitInfo["scope"];
+                      current: number; max: number; affected: Element[]; reasonText: string };
+// ... one variant for each code below
+export type SclReasonDetails = TargetMissing | LimitReached | /* ... */;
+export type SclReason = SclReasonDetails["key"];
+```
+
+A variant has no optional fields. A reason that is not a set has `affected: []`.
+
+| Code | Category | Fields | Source |
+|---|---|---|---|
+| `target-missing` | `target` | `tag` | content model |
+| `target-kind` | `target` | `tag`, `expected` | content model |
+| `target-detached` | `target` | `tag` | policy |
+| `target-invalid` | `target` | `tag` | content model |
+| `capability-undeclared` | `capability` | `tag`, `service`, `scope` | policy |
+| `capability-zero` | `capability` | `tag`, `service`, `scope` | `tServiceWithMax` |
+| `capability-mode` | `capability` | `tag`, `service`, `mode` | `tServiceConfReportControl` |
+| `capability-invalid` | `capability` | `tag`, `service`, `value` | `tServiceWithMax` |
+| `limit-reached` | `limit` | `tag`, `scope`, `current`, `max`, `affected` | `@max` |
+| `limit-buffered-reached` | `limit` | `tag`, `scope`, `buffered`, `maxBuffered`, `affected` | `@maxBuf` |
+| `limit-unbuffered-reached` | `limit` | `tag`, `scope`, `unbuffered`, `max`, `maxBuffered`, `affected` | `@max` and `@maxBuf` |
+| `limit-attributes-reached` | `limit` | `tag`, `scope`, `current`, `max`, `affected` | `@maxAttributes` |
+| `identity-name-taken` | `identity` | `tag`, `name`, `conflict` | `uniqueReportControlInLN0` |
+| `identity-id-taken` | `identity` | `tag`, `id`, `conflict` | `uniqueDTT_ID` |
+| `identity-already-present` | `identity` | `tag`, `controlBlock` | policy |
+| `identity-instance-conflict` | `identity` | `tag`, `inst`, `conflict` | `uniqueLNInLDevice` |
+| `reference-missing` | `reference` | `tag`, `kind`, `name` | `ref2DataSetGSELN0` |
+| `reference-in-use` | `reference` | `tag`, `kind`, `removed`, `affected` | `ref2DOType` |
+| `reference-duplicate` | `reference` | `tag`, `iedName`, `apName` | `uniqueConnectedAP` |
+| `mapping-missing` | `mapping` | `tag`, `iedName`, `apName` | `Communication` |
+| `mapping-missing-gse` | `mapping` | `tag`, `ldInst`, `cbName` | `Communication` |
+| `mapping-missing-smv` | `mapping` | `tag`, `ldInst`, `cbName` | `Communication` |
+| `restriction-mismatch` | `restriction` | `tag`, `expected`, `actual` | IEC 61850-7-3, IEC 61850-7-4 |
+| `restriction-undeclared` | `restriction` | `tag` | policy |
+| `restriction-not-editable` | `restriction` | `tag`, `attribute` | IEC 61850-6 |
+
+### D.1 Choosing a code
+
+The table above gives the fields. This section gives the rule for each code: when to return it, and when another code is correct.
+
+Three rules decide most cases:
+
+1. **Name the constraint, not the symptom.** "The name is in use" is `identity-name-taken`. "It did not work" is not a code.
+2. **A code belongs to the check that failed, not to the document.** A dangling `iedName` in a different IED is a `reference-missing` finding. It is not a reason to refuse this edit.
+3. **One code for one fact.** If two independent items block the operation, return two reasons with `all: true`, or the first reason with `check*`.
+
+#### `target` — there is no place for the element
+
+- **`target-missing`** — the element that the operation needs does not exist. No `LN0` under the parent, no `LDevice`, no `LGOS` for a fixed target, no `ConnectedAP`. Use it when the container is absent. Do not use it when a pointer inside the parent has no target; that is `reference-missing`.
+- **`target-kind`** — the element exists but has the wrong tag. A `DataSet` passed to `updateReportControl`, or a `SubNetwork` used as the parent of a control block. Use it when the tag is wrong. Do not use it when the tag is correct and the element is incomplete.
+- **`target-invalid`** — the element exists and has the correct tag, but it cannot serve the purpose. A `Private` element as a parent, or an `LN` that is not under an `IED` when a limit must be read. Use it for a structural problem that is not a tag mismatch.
+- **`target-detached`** — the element is not in a document. This is a caller error. The library throws `SclError` with this code and does not return a result.
+
+#### `capability` — what the file says about the device
+
+- **`capability-undeclared`** — the file has no `Services` element, or no service element in it. The policy decides if this blocks. Use it only when the declaration is absent.
+- **`capability-zero`** — the file declares the service with `max="0"`. The device says that it has none. Use it when the declared value is zero. Do not use `limit-reached` for this case.
+- **`capability-mode`** — the service has a limit, but a mode flag excludes the requested kind. Example: `bufMode="unbuffered"` when the caller adds a buffered report. Use it when a value other than `max` excludes the operation.
+- **`capability-invalid`** — the service element exists, but `max` is absent or not a number. The file breaks the schema. Use it when the library cannot read a usable limit. Do not use "unbounded" as a fallback: the file is wrong, not permissive.
+
+#### `limit` — a declared maximum
+
+- **`limit-reached`** — the total count would exceed `max`. Use it for the total only.
+- **`limit-buffered-reached`** — the buffered count would exceed `maxBuf`. Use it only when the file declares `maxBuf` and the element is buffered.
+- **`limit-unbuffered-reached`** — the unbuffered count would exceed the space that `max` leaves after `maxBuf`. Use it only when the element is unbuffered and the file declares `maxBuf`.
+- **`limit-attributes-reached`** — a `DataSet` would exceed `maxAttributes`. Use it for the attribute count in one `DataSet`, not for the number of `DataSet` elements.
+
+Do not use a `limit` code when nothing is declared or when the declared value is zero. Those are `capability` codes. The host shows a different message for each.
+
+#### `identity` — two elements claim the same item
+
+- **`identity-name-taken`** — another element in the same scope uses the name. The scope is the one that the schema defines: `ReportControl` names are unique in an `LN0`, and `DataSet` names are unique in an `LN` or `LN0`. Use it for a clash in the scope. A name in a different `LN0` is not a clash.
+- **`identity-id-taken`** — a DataTypeTemplates id is already in use. Use it for `LNodeType`, `DOType`, `DAType` and `EnumType` ids.
+- **`identity-already-present`** — the item that the caller wants to add is already there. The control block already has a supervision, or the `ExtRef` is already subscribed. Use it when the operation would duplicate a relationship, not a name.
+- **`identity-instance-conflict`** — the requested instance is in use. The combination of `inst`, `lnClass` and `prefix` already exists, or a fixed supervision instance is taken. Use it when the clash is an instance, not a name.
+
+#### `reference` — a pointer needs a target
+
+- **`reference-missing`** — a pointer that the operation uses has no target. A `datSet` attribute with no `DataSet`, an `lnType` with no `LNodeType`, an `FCDA` `ldInst` with no `LDevice`, or a `ClientLN` `iedName` with no `IED`. Use it for the operation that creates the pointer, and for a finding in the document.
+- **`reference-in-use`** — the target still has users, so a removal or a change would break them. `removeDataType` and `checkLNodeTypeUpdate` use it with `affected` and `kind`. Use it when the blocker is an existing user of the element that the caller wants to remove or change.
+- **`reference-duplicate`** — the file contains two elements that claim the same key. Example: two `ConnectedAP` elements with the same `iedName` and `apName` in different subnets. Use it for a finding in the document. When the caller adds the second element, `identity-*` is the correct code.
+
+#### `mapping` — the communication section does not cover the block
+
+- **`mapping-missing`** — no `ConnectedAP` exists for the IED and AccessPoint of the control block.
+- **`mapping-missing-gse`** — the `ConnectedAP` exists, but it has no `GSE` for this `ldInst` and `cbName`.
+- **`mapping-missing-smv`** — the same, for `SMV`.
+
+Use a `mapping` code only when the caller requests the communication part. If the caller adds a control block and does not request `GSE` or `SMV`, nothing is missing. The host can still show a warning with the same code on a permitted result.
+
+#### `restriction` — the data does not fit the request
+
+- **`restriction-mismatch`** — the data exists but is not compatible. The `ExtRef` restricts `pDO`, `pDA`, `pLN` or `pServT`, and the `FCDA` does not meet the restriction. Use it when both sides are declared and they disagree.
+- **`restriction-undeclared`** — the element gives no restriction data, so the library cannot use the rule. Example: an `ExtRef` without `pDO`, which is 77% of the elements in the sample. Use it as information only. This code never blocks.
+- **`restriction-not-editable`** — the file forbids the change although the schema permits it. `valKind` is neither `Conf` nor `RO`, `valImport` is not true, or a supervision `LN` has no creation marker. Use it when the schema permits the edit but the file does not.
+
+#### Common mistakes
+
+1. `limit-reached` for `max="0"`. Use `capability-zero`.
+2. `capability-undeclared` when the service element exists and only `max` is absent. Use `capability-invalid`.
+3. `target-missing` when the parent exists but has the wrong tag. Use `target-kind`.
+4. `reference-missing` for a name clash. Use `identity-name-taken`.
+5. `restriction-undeclared` as a refusal. It never blocks.
+6. `mapping-missing` when the caller did not request the communication part.
+7. Two limit reasons for one cause. A `maxBuf` breach on a buffered element is `limit-buffered-reached` only.
+
+## Appendix E. Checks after 2.1
+
+### E.1 `checkRemoveDataType` and `checkRemoveSupervision`
+
+These functions have no `force` parameter. A refusal with `reference-in-use` means that the user must confirm. After the confirmation, the host calls `removeDataType(remove, { force: true })`.
+
+| Rule | Reason |
+|---|---|
+| Not a data type or a supervision `Val` | `target-kind`, `reference-missing` |
+| Still referenced | `reference-in-use` with `kind` and `affected` |
+| `LGOS` or `LSVS` without a creation marker | `restriction-not-editable` |
+| Fixed instance in use | `identity-instance-conflict` |
+
+`removeDataType` also removes types that become unused. This is a result of the operation, not a reason. It stays out of the result. The host can compare the document after the edit.
+
+### E.2 `checkLNodeTypeUpdate`
+
+This is a separate issue. The signature follows the edit function:
+
+```ts
+checkLNodeTypeUpdate(lNodeType: Element, targetDoc: XMLDocument, options?: { all?: boolean })
+```
+
+It uses `reference-in-use` with `kind: "fcda" | "extref" | "sourceref"` and aggregation. It needs no new category.
+
+## Appendix F. Example implementation: `checkAddDataSet`
+
+This appendix gives one implementation. It uses the example from Harald Brabenetz: "The maximum number of DataSets (12) has been reached."
+
+F.1 gives the sketch. F.2 to F.9 give the detail. The code is illustrative. Names can change in the implementation pull requests. The shape, the order and the texts follow Sections 3 to 5.
+
+### F.1 Sketch
+
+```ts
+// 1. One variant for one reason. One factory builds the sentence from the fields.
+type LimitReached = {
+  key: "limit-reached";
+  tag: "DataSet";
+  current: number;
+  max: number;
+  affected: Element[];
+  reasonText: string;
+};
+
+const limitReached = (current: number, max: number): LimitReached => ({
+  key: "limit-reached", tag: "DataSet", current, max, affected: [],
+  reasonText: `The maximum number of DataSets (${current} of ${max}) has been reached.`,
+});
+
+// 2. One walker. The stages follow Section 3.5. A rule with no precondition gives no reason.
+function walk(parent, options, stopAtFirst): SclReasonDetails[] {
+  const ln = targetFor(parent);
+  if (!ln) return [targetMissing("DataSet")];              // stage 1
+  if (max === 0) return [capabilityZero("DataSet")];       // stage 2, not a limit
+  // stage 3 capability-undeclared, stage 4 identity, stage 6 limit
+  // ... each rule pushes its reason, then returns when stopAtFirst is true
+}
+
+// 3. The public function: one reason, or every reason when the caller asks.
+checkAddDataSet(parent, options)
+// { allowed: true } | { allowed: false, reason, reasons? }
+
+// 4. The create function: one check, no second implementation of a rule.
+createDataSet(parent, options)
+// checkAddDataSet(parent, options) refused ? null : edit
+```
+
+**What the author must remember**
+
+1. One variant for each reason code. No optional fields inside a variant. A reason that is not a set has `affected: []`.
+2. One factory for each variant. The factory builds the sentence from the same fields that the host reads. British English, full stop, plain numbers, no `Intl`.
+3. `reason` is always `reasons[0]`. `reasons` is a non-empty tuple and is present only when the caller sets `all: true` and a second reason exists.
+4. The order follows Section 3.5: target, capability-zero or mode or invalid, capability-undeclared, identity, reference, limit, mapping, restriction.
+5. Suppression: a rule whose precondition failed gives no reason. A zero declaration excludes a limit reason. No target excludes every later stage.
+6. `limitPolicy` applies to an undeclared limit only. It never applies to `max="0"`. The default is `refuse` in 2.x.
+7. `max="0"` gives `capability-zero`. A missing attribute gives `capability-invalid`. A missing service element gives `capability-undeclared`.
+8. Count blocks, not `RptEnabled@max` instances. Appendix C.1 gives each counting rule.
+9. The create function calls the check function one time and returns `null` or `[]` when the check refuses. No rule is written twice.
+10. A check is read-only: no `createElement`, no generator, no clone, one pass.
+11. Every code has a source comment and a test. Every family has the equivalence test `createX === null ⟺ !checkX.allowed`.
+12. The paragraph text is not API. The library test asserts one exact sentence for each code. A host test asserts fields.
+13. A host must not mix `check*` with `can*` for one control. `check*` with `create*` is the supported pair.
+14. A requested part that is not possible is a refusal. `incomplete` appears only when the host asks for it.
+
+### F.2 The variants and the factories
+
+```ts
+// foundation/reasons.ts
+import { LimitInfo, SclReasonDetails } from "./errors.js";
+
+export type LimitReached = {
+  key: "limit-reached";
+  tag: "DataSet";
+  scope: LimitInfo["scope"];
+  current: number;
+  max: number;
+  affected: Element[];          // empty: this reason is not a set
+  reasonText: string;
+};
+
+export type CapabilityZero = {
+  key: "capability-zero";
+  tag: "DataSet";
+  service: "ConfDataSet";
+  scope: LimitInfo["scope"];
+  reasonText: string;
+};
+
+export type CapabilityUndeclared = {
+  key: "capability-undeclared";
+  tag: "DataSet";
+  service: "ConfDataSet";
+  scope: LimitInfo["scope"];
+  reasonText: string;
+};
+
+export type NameTaken = {
+  key: "identity-name-taken";
+  tag: "DataSet";
+  name: string;
+  conflict: Element;
+  reasonText: string;
+};
+
+/** One factory for each variant. The factory builds the sentence from the fields. */
+export function limitReached(
+  tag: "DataSet",
+  scope: LimitInfo["scope"],
+  current: number,
+  max: number,
+): LimitReached {
+  return {
+    key: "limit-reached",
+    tag,
+    scope,
+    current,
+    max,
+    affected: [],
+    reasonText: `The maximum number of ${tag} instances (${current} of ${max}) has been reached.`,
+  };
+}
+
+export function capabilityZero(tag: "DataSet"): CapabilityZero {
+  return {
+    key: "capability-zero",
+    tag,
+    service: "ConfDataSet",
+    scope: "unbounded",
+    reasonText: `The file declares that this device does not support ${tag} elements.`,
+  };
+}
+
+export function capabilityUndeclared(tag: "DataSet"): CapabilityUndeclared {
+  return {
+    key: "capability-undeclared",
+    tag,
+    service: "ConfDataSet",
+    scope: "unbounded",
+    reasonText: `The file does not declare a maximum for ${tag} elements.`,
+  };
+}
+
+export function nameTaken(
+  tag: "DataSet",
+  name: string,
+  conflict: Element,
+): NameTaken {
+  return {
+    key: "identity-name-taken",
+    tag,
+    name,
+    conflict,
+    reasonText: `The name ${name} is already used by another ${tag}.`,
+  };
+}
+```
+
+### F.3 The helpers
+
+```ts
+// tDataSet/checkAddDataSet.ts
+import { Insert } from "@openscd/oscd-api";
+import { CheckResult } from "../foundation/errors.js";
+import { servicesLimits } from "../tServices/servicesLimits.js";
+
+/** @returns The LN or LN0 that receives the DataSet */
+function targetFor(parent: Element): Element | undefined {
+  if (parent.tagName === "LN0" || parent.tagName === "LN") return parent;
+  return parent.querySelector("LN0, LN") ?? undefined;
+}
+
+/** @returns The DataSet elements in the LDevice of `ln` */
+function dataSetCount(ln: Element): number {
+  const ldevice = ln.closest("LDevice");
+  if (!ldevice) return 0;
+  return ldevice.querySelectorAll(":scope > LN0 > DataSet, :scope > LN > DataSet")
+    .length;
+}
+```
+
+### F.4 The walker
+
+The walker collects the reasons in the order of Section 3.5. It stops after the first reason when `stopAtFirst` is true.
+
+```ts
+export type AddDataSetOptions = {
+  attributes?: { name?: string };
+  limitPolicy?: "permit" | "refuse";
+  all?: boolean;
+};
+
+function walk(
+  parent: Element,
+  options: AddDataSetOptions,
+  stopAtFirst: boolean,
+): SclReasonDetails[] {
+  const policy = options.limitPolicy ?? "refuse";
+  const reasons: SclReasonDetails[] = [];
+
+  // Stage 1: target
+  const ln = targetFor(parent);
+  if (!ln) return [targetMissing("DataSet")];
+
+  const { max } = servicesLimits(ln, "ConfDataSet");
+  const name = options.attributes?.name;
+  const current = dataSetCount(ln);
+
+  // Stage 2 and 3: capability
+  if (max === 0) reasons.push(capabilityZero("DataSet"));
+  else if (max === undefined && policy === "refuse")
+    reasons.push(capabilityUndeclared("DataSet"));
+  if (stopAtFirst && reasons.length) return reasons;
+
+  // Stage 4: identity
+  const conflict = name
+    ? ln.querySelector(`:scope > DataSet[name="${name}"]`)
+    : null;
+  if (conflict) reasons.push(nameTaken("DataSet", name!, conflict));
+  if (stopAtFirst && reasons.length) return reasons;
+
+  // Stage 6: limit
+  if (max !== undefined && max > 0 && current + 1 > max)
+    reasons.push(limitReached("DataSet", "LDevice", current, max));
+
+  return reasons;
+}
+```
+
+A `max="0"` declaration returns `capability-zero` only. The limit stage is skipped, because a zero declaration cannot be exceeded.
+
+### F.5 The public function
+
+```ts
+export function checkAddDataSet(
+  parent: Element,
+  options: AddDataSetOptions = {},
+): CheckResult {
+  const reasons = walk(parent, options, !options.all);
+
+  if (reasons.length === 0) return { allowed: true };
+  const [reason, ...rest] = reasons as [SclReasonDetails, ...SclReasonDetails[]];
+
+  return {
+    allowed: false,
+    reason,
+    ...(options.all && rest.length > 0 ? { reasons: [reason, ...rest] } : {}),
+  };
+}
+```
+
+`reason` is always `reasons[0]`. The `reasons` field is present only when the caller asks for it and a second reason exists.
+
+### F.6 The create function
+
+The create function uses the check function. It has no second implementation of the rules.
+
+```ts
+export function createDataSet(
+  parent: Element,
+  options: AddDataSetOptions = {},
+): Insert | null {
+  const check = checkAddDataSet(parent, options);
+  if (!check.allowed) return null;
+
+  const ln = targetFor(parent)!;
+  const dataSet = createElement(ln.ownerDocument, "DataSet", {
+    name: options.attributes?.name ?? uniqueElementName(ln, "DataSet"),
+  });
+
+  return { parent: ln, node: dataSet, reference: getReference(ln, "DataSet") };
+}
+```
+
+### F.7 Tests
+
+```ts
+it("gives the sentence for a reached maximum", () => {
+  // 12 DataSet elements in the LDevice, ConfDataSet max="12"
+  const check = checkAddDataSet(ln0);
+
+  expect(check.allowed).to.equal(false);
+  if (check.allowed) return;
+
+  expect(check.reason.key).to.equal("limit-reached");
+  expect(check.reason).to.include({ current: 12, max: 12 });
+  expect(check.reason.reasonText).to.equal(
+    "The maximum number of DataSets (12 of 12) has been reached.",
+  );
+});
+
+it("permits an undeclared maximum only with permit", () => {
+  // No Services element in the IED
+  expect(checkAddDataSet(ln0).allowed).to.equal(false);
+  expect(checkAddDataSet(ln0, { limitPolicy: "permit" }).allowed).to.equal(true);
+});
+
+it("returns every reason when the caller asks for them", () => {
+  // name in use and maximum reached
+  const check = checkAddDataSet(ln0, { all: true, attributes: { name: "DS1" } });
+  expect(check.allowed).to.equal(false);
+  if (check.allowed) return;
+
+  expect(check.reasons?.map((r) => r.key)).to.deep.equal([
+    "identity-name-taken",
+    "limit-reached",
+  ]);
+});
+
+it("returns null from createDataSet exactly when the check refuses", () => {
+  expect(createDataSet(ln0) === null).to.equal(!checkAddDataSet(ln0).allowed);
+});
+```
+
+### F.8 The host
+
+```ts
+const options = { limitPolicy: "permit" } as const;
+const check = checkAddDataSet(ln0, options);
+
+addButton.disabled = !check.allowed;
+addButton.title = check.allowed ? "" : check.reason.reasonText;
+// "The maximum number of DataSets (12 of 12) has been reached."
+```
+
+### F.9 What the other families copy
+
+1. The same four parts: reasons and factories, helpers, walker with stages, public function with `all`.
+2. The same order from Section 3.5. Each stage returns early only when `stopAtFirst` is true.
+3. One factory for each variant. The sentence uses the fields of the variant.
+4. The create function delegates to the check function, always.
+
+Two families need more work than `DataSet`:
+
+- `ReportControl` needs the counting rule of Appendix C.1 and the buffered and unbuffered stages.
+- `SubscriptionSupervision` needs the five existing predicates as separate reasons.
